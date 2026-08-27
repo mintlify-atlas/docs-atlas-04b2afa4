@@ -1,7 +1,7 @@
 ---
-title: "Optimizing Vesper Search Speed and Accuracy"
+title: "Vesper Performance Tuning: Timeout and Database Tips"
 sidebarTitle: "Performance Tips"
-description: "Tune Vesper's timeout and database selection to balance search speed against result accuracy. Includes benchmarks and practical guidance for different investigation scenarios."
+description: "Tune Vesper's timeout and database to balance speed vs. accuracy. Covers the 250-worker pool, per-database benchmarks, and practical scenario guidance."
 ---
 
 Vesper's raw speed comes from its goroutine-based worker pool: every search dispatches up to 250 concurrent HTTP requests at once. In practice, two runtime knobs control the trade-off between how fast Vesper finishes and how thorough its results are — the `--timeout` flag and the `--database` flag. Understanding how they interact lets you tune Vesper precisely to your investigation needs.

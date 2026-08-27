@@ -1,5 +1,5 @@
 ---
-title: "Build Vesper from Source for Development"
+title: "Building Vesper from Source: Dev Setup and Releases"
 sidebarTitle: "Building"
 description: "Clone the Vesper repo, build with Go 1.24, run the metaprogramming code generators, and produce cross-platform release builds with UPX compression."
 ---
@@ -109,27 +109,30 @@ raw databases/
 
 ### Running the generators
 
-Each generator reads a `*_fix.json` file and emits a `.go` source file to stdout. Redirect the output to overwrite the corresponding file in `sites/`:
+The generator source files live in `metaprogramming/` and are declared as `package metaprogramming`. They are not standalone executables; each file exports a single generation function (`generateWhatsmyname`, `generateSherlock`, `generateMaigret`). To use them, call the relevant function from a `package main` wrapper, or temporarily change the package declaration to `main` and add a `main()` shim that calls the generation function.
 
-```bash
-# Regenerate WhatsMyName site data
-go run metaprogramming/generateWhatsmyname.go \
-  "raw databases/whatsmyname/whatsmyname_fix.json" \
-  > sites/whatsmynameSites.go
+The usage strings embedded in each file document the intended command-line interface:
 
-# Regenerate Sherlock site data
-go run metaprogramming/generateSherlockSites.go \
-  "raw databases/sherlock/sherlock_fix.json" \
-  > sites/sherlockSites.go
+- **WhatsMyName** (`generateWhatsmyname.go`) — takes the path to `whatsmyname_fix.json` as its sole argument and writes the generated Go code to **stdout**:
 
-# Regenerate Maigret site data
-go run metaprogramming/generateMaigret.go \
-  "raw databases/maigret/maigret_fix.json" \
-  sites/maigretSites.go
-```
+  ```text
+  go run generateWhatsmyname.go whatsmyname_fix.json > sites/whatsmynameSites.go
+  ```
+
+- **Sherlock** (`generateSherlockSites.go`) — takes the path to `sherlock_fix.json` as its sole argument and writes to **stdout**:
+
+  ```text
+  go run generateSherlockSites.go sherlock_fix.json > sites/sherlockSites.go
+  ```
+
+- **Maigret** (`generateMaigret.go`) — takes two arguments: the input JSON path and the output `.go` file path. It writes **directly to the output file** rather than stdout:
+
+  ```text
+  go run generateMaigret.go maigret_fix.json ../sites/maigretSites.go
+  ```
 
 <Note>
-  The Maigret generator (`generateMaigret.go`) takes the output file path as its second argument rather than redirecting via stdout — note the different invocation pattern.
+  The Maigret generator writes directly to the output file path provided as its second argument, unlike the WhatsMyName and Sherlock generators which write to stdout. This means you do not redirect its output with `>`.
 </Note>
 
 After regenerating, rebuild the binary so the new site data is compiled in:

@@ -1,7 +1,7 @@
 ---
 title: "Vesper Database Schema and Site Detection Reference"
 sidebarTitle: "Database Schema"
-description: "Technical reference for Vesper's three embedded site databases — WhatsMyName, Sherlock, and Maigret — including site entry field definitions and detection logic."
+description: "Technical reference for WhatsMyName, Sherlock, and Maigret site databases in Vesper, including all struct fields and detection logic."
 ---
 
 Vesper ships with three site databases compiled directly into the binary. Rather than reading JSON at runtime, raw database files under `raw databases/` are pre-processed by metaprogramming scripts (`metaprogramming/generateWhatsmyname.go`, `generateSherlockSites.go`, `generateMaigret.go`) that emit Go source files — `sites/whatsmynameSites.go`, `sites/sherlockSites.go`, and `sites/maigretSites.go` — which declare fully initialized Go maps and slices. This means zero I/O overhead at startup and no external file dependencies in the compiled binary.
@@ -223,6 +223,14 @@ Each database has its own site entry schema and its own detection logic implemen
 
     <ParamField body="urlProbe" type="*string">
       Optional pointer to an alternate probe URL. If set, Vesper sends the HTTP request to this URL (with `{username}` substituted) instead of `url`. The `url` value is still used as the result's display URL.
+    </ParamField>
+
+    <ParamField body="urlSubpath" type="*string">
+      Optional pointer to a URL subpath fragment for the site. Informational only — not used in the HTTP check logic.
+    </ParamField>
+
+    <ParamField body="errors" type="map[string]string">
+      Optional map of error codes to descriptive error messages for the site. Informational only — not evaluated during the HTTP check.
     </ParamField>
 
     <ParamField body="checkType" type="*string" default="status_code">

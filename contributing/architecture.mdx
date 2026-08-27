@@ -1,5 +1,5 @@
 ---
-title: "Vesper Internals: Architecture and Code Structure"
+title: "Vesper Architecture: Packages, Workers, and TUI Pipeline"
 sidebarTitle: "Architecture"
 description: "Explore Vesper's internals: goroutine worker pools, the Bubble Tea TUI pipeline, site detection schemas, and the metaprogramming code-generation system."
 ---
@@ -23,6 +23,7 @@ vesper/
 │       ├── model.go            # Model — username input + database list (Bubble Tea)
 │       ├── progress.go         # ProgressModel — live progress bar + found counter
 │       ├── table.go            # TableModel — scrollable results table
+│       ├── styles.go           # lipgloss style variables shared across TUI models
 │       └── runner.go           # RunTUI() — three-phase TUI orchestration
 ├── pkg/types/types.go          # Config, JobResult, SherlockJob, MaigretJob
 ├── sites/
@@ -34,7 +35,8 @@ vesper/
 ├── tools/
 │   ├── checher.go              # WhatsMyNameCheckURL(), SherlockCheckURL(), MaigretCheckURL()
 │   ├── callback.go             # SetFoundCallback(), SetProgressCallback(), NotifyFound(), NotifyProgress()
-│   └── colors.go               # Terminal color helpers (fatih/color wrappers)
+│   ├── colors.go               # Terminal color helpers (fatih/color wrappers)
+│   └── logoprint.go            # PrintLogo() — ASCII logo printed at startup
 └── metaprogramming/
     ├── generateWhatsmyname.go  # JSON → Go slice for WhatsmynameSites
     ├── generateSherlockSites.go# JSON → Go map for SherlockSites

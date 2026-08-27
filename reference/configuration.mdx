@@ -1,7 +1,7 @@
 ---
-title: "Vesper Runtime Configuration and Defaults"
+title: "Vesper Runtime Configuration Reference and Defaults"
 sidebarTitle: "Configuration"
-description: "Reference for Vesper's runtime configuration values — worker concurrency, buffer size, timeout range, and HTTP client settings — with explanations of how each affects performance."
+description: "Reference for Vesper runtime configuration: worker count, buffer size, HTTP client settings, and timeout — with defaults and hardcoded values."
 ---
 
 Vesper has no configuration file. All runtime behavior is controlled either by CLI flags at invocation time or by constants hardcoded in the source that require a recompile to change. The `Config` struct in `pkg/types/types.go` carries every setting through the call stack, from `flags.Parse()` or `tui.RunTUI()` all the way down to the goroutine worker pools in `cmd/runner/`.
