@@ -1,0 +1,215 @@
+---
+title: "Build Vesper from Source for Development"
+sidebarTitle: "Building"
+description: "Clone the Vesper repo, build with Go 1.24, run the metaprogramming code generators, and produce cross-platform release builds with UPX compression."
+---
+
+Vesper is a standard Go module with no CGo dependencies, so building from source is straightforward on any platform that supports Go 1.24.3. The repository bundles pre-generated site data directly as Go source files, meaning a plain `go build` produces a fully self-contained binary without any external data files at runtime.
+
+## Prerequisites
+
+Before you begin, ensure the following tools are installed and available on your `PATH`:
+
+- **Go 1.24.3** — the version pinned in `go.mod`. Download from [go.dev/dl](https://go.dev/dl/).
+- **Git** — to clone the repository.
+- **UPX** _(optional, release builds only)_ — for binary compression. Install via your system package manager (`apt install upx`, `brew install upx`, etc.).
+
+## Standard Build
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/ppmpreetham/vesper.git
+    cd vesper
+    ```
+  </Step>
+
+  <Step title="Download Go module dependencies">
+    ```bash
+    go mod download
+    ```
+
+    The key direct and transitive dependencies are resolved automatically:
+
+    | Module | Version | Role |
+    |---|---|---|
+    | `github.com/charmbracelet/bubbles` | v0.21.0 | TUI components — textinput, list, progress bar |
+    | `github.com/charmbracelet/bubbletea` | v1.3.4 | Elm-architecture TUI framework |
+    | `github.com/charmbracelet/lipgloss` | v1.1.0 | Terminal styling and layout |
+    | `github.com/fatih/color` | v1.18.0 | Terminal color output for CLI mode |
+    | `golang.org/x/sync` | v0.11.0 | Synchronization primitives |
+  </Step>
+
+  <Step title="Build the binary">
+    <Tabs>
+      <Tab title="Linux / macOS">
+        ```bash
+        go build -o vesper .
+        ```
+
+        Verify the build succeeded:
+
+        ```bash
+        ./vesper --version
+        ```
+      </Tab>
+      <Tab title="Windows">
+        ```powershell
+        go build -o vesper.exe .
+        ```
+
+        Verify the build succeeded:
+
+        ```powershell
+        .\vesper.exe --version
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Run a quick smoke test">
+    ```bash
+    # Linux / macOS
+    ./vesper --help
+
+    # Windows
+    .\vesper.exe --help
+    ```
+
+    You should see the usage text listing all available flags and databases.
+  </Step>
+</Steps>
+
+<Note>
+  The `--version` flag currently prints `Vesper version 1.0.0` from `cmd/flags/flags.go`. The canonical release version (`0.2.0`) is tracked separately in the `VERSION` file and injected via `-ldflags` in CI — see the [Cross-Platform Builds](#cross-platform-builds) section below.
+</Note>
+
+## Metaprogramming: Regenerating Site Data
+
+Vesper embeds all site definitions as compiled-in Go slices and maps rather than loading JSON files at runtime. This keeps the binary fully self-contained and eliminates file-I/O overhead at startup. The Go source files under `sites/` are code-generated from pre-cleaned JSON fixtures under `raw databases/`.
+
+<Note>
+  You only need to re-run the generators if you update the raw database JSON files. Checked-in generated files (`sites/whatsmynameSites.go`, `sites/sherlockSites.go`, `sites/maigretSites.go`) are ready to use as-is for a standard build.
+</Note>
+
+### Database source layout
+
+```text
+raw databases/
+├── whatsmyname/
+│   ├── whatsmyname.json       # upstream source
+│   └── whatsmyname_fix.json   # pre-cleaned, used by generator
+├── sherlock/
+│   ├── sherlock.json
+│   └── sherlock_fix.json
+└── maigret/
+    ├── maigret.json
+    └── maigret_fix.json
+```
+
+### Running the generators
+
+Each generator reads a `*_fix.json` file and emits a `.go` source file to stdout. Redirect the output to overwrite the corresponding file in `sites/`:
+
+```bash
+# Regenerate WhatsMyName site data
+go run metaprogramming/generateWhatsmyname.go \
+  "raw databases/whatsmyname/whatsmyname_fix.json" \
+  > sites/whatsmynameSites.go
+
+# Regenerate Sherlock site data
+go run metaprogramming/generateSherlockSites.go \
+  "raw databases/sherlock/sherlock_fix.json" \
+  > sites/sherlockSites.go
+
+# Regenerate Maigret site data
+go run metaprogramming/generateMaigret.go \
+  "raw databases/maigret/maigret_fix.json" \
+  sites/maigretSites.go
+```
+
+<Note>
+  The Maigret generator (`generateMaigret.go`) takes the output file path as its second argument rather than redirecting via stdout — note the different invocation pattern.
+</Note>
+
+After regenerating, rebuild the binary so the new site data is compiled in:
+
+```bash
+go build -o vesper .
+```
+
+## Cross-Platform Builds
+
+For release builds, set `GOOS` and `GOARCH` and inject the version string via `-ldflags`. The `-s -w` flags strip the symbol table and DWARF debug info to reduce binary size before UPX compression.
+
+<CodeGroup>
+
+```bash Linux amd64
+GOOS=linux GOARCH=amd64 \
+  go build -ldflags="-s -w -X main.Version=0.2.0" \
+  -o dist/vesper-linux-amd64 .
+```
+
+```bash Linux arm64
+GOOS=linux GOARCH=arm64 \
+  go build -ldflags="-s -w -X main.Version=0.2.0" \
+  -o dist/vesper-linux-arm64 .
+```
+
+```bash macOS amd64
+GOOS=darwin GOARCH=amd64 \
+  go build -ldflags="-s -w -X main.Version=0.2.0" \
+  -o dist/vesper-darwin-amd64 .
+```
+
+```bash macOS arm64 (Apple Silicon)
+GOOS=darwin GOARCH=arm64 \
+  go build -ldflags="-s -w -X main.Version=0.2.0" \
+  -o dist/vesper-darwin-arm64 .
+```
+
+```bash Windows amd64
+GOOS=windows GOARCH=amd64 \
+  go build -ldflags="-s -w -X main.Version=0.2.0" \
+  -o dist/vesper-windows-amd64.exe .
+```
+
+```bash Windows arm64
+GOOS=windows GOARCH=arm64 \
+  go build -ldflags="-s -w -X main.Version=0.2.0" \
+  -o dist/vesper-windows-arm64.exe .
+```
+
+</CodeGroup>
+
+### UPX compression and checksums
+
+After building all targets, apply UPX compression and generate checksums:
+
+```bash
+# Compress all binaries in dist/
+upx --best --lzma dist/*
+
+# Generate SHA-256 checksums
+cd dist
+sha256sum * > checksums.txt
+cat checksums.txt
+```
+
+<Tip>
+  UPX `--best --lzma` produces the smallest possible binaries at the cost of slightly longer compression time. For development iteration builds you can skip UPX entirely — it is only applied during the release CI pipeline.
+</Tip>
+
+## Release Process
+
+Pushing to the `release` branch triggers the GitHub Actions workflow defined in `.github/workflows/release.yaml`. The CI pipeline:
+
+1. Reads the version string from the `VERSION` file (currently `0.2.0`).
+2. Runs `go build` for all 6 target combinations (linux/windows/darwin × amd64/arm64) in parallel via a matrix strategy.
+3. Compresses every binary with `upx --best --lzma`.
+4. Generates `checksums.txt` with `sha256sum`.
+5. Creates (or updates) a GitHub Release tagged `v<VERSION>` and attaches all artifacts.
+
+<Warning>
+  Only push to the `release` branch when you intend to cut a public release. Every push to that branch triggers a new GitHub Release tagged with the version read from `VERSION`. Bump `VERSION` before merging to `release`.
+</Warning>

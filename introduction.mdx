@@ -1,0 +1,74 @@
+---
+title: "Vesper: Superfast OSINT Username Search Engine"
+sidebarTitle: "Introduction"
+description: "Vesper is a blazingly-fast OSINT CLI that hunts usernames across hundreds of sites by fusing WhatsMyName, Sherlock, and Maigret databases."
+---
+
+Vesper is an open-source OSINT command-line tool written in Go that hunts down usernames across hundreds of websites in seconds. Instead of querying a single database, Vesper fuses three battle-tested intelligence sources — WhatsMyName, Sherlock, and Maigret — into one unified engine. Whether you are performing a reconnaissance investigation, auditing your own digital footprint, or researching a target username for defensive security purposes, Vesper gives you broad cross-platform coverage from a single command.
+
+## What Problem Vesper Solves
+
+Existing username-enumeration tools are either slow (running requests sequentially or with low concurrency) or limited to a single site database. Vesper addresses both constraints. It spawns **250 concurrent goroutine workers** that drain a buffered job channel, saturating available network bandwidth and completing a full WhatsMyName sweep in roughly 21 seconds on commodity hardware — up to 3× faster than tools like [Blackbird](https://github.com/p1ngul1n0/blackbird).
+
+## Integrated Databases
+
+Vesper compiles all three site lists directly into the binary at build time, so there are no external files to manage.
+
+| Database | Role | Notes |
+|---|---|---|
+| **WhatsMyName** | Primary, balanced coverage | Stable, recommended for most searches |
+| **Sherlock** | Social media focus | May produce false positives |
+| **Maigret** | Broadest coverage, niche sites | May produce false positives |
+
+<Note>
+  Only the WhatsMyName database is considered stable at this time. Sherlock and Maigret are included for breadth but are known to produce false positives. Start with WhatsMyName for the most reliable results.
+</Note>
+
+## Key Differentiators
+
+- **250 goroutine workers** running concurrently against a 1 000-entry buffered job channel
+- **~21 s** for a full WhatsMyName sweep, ~12 s for Sherlock, ~33 s for Maigret
+- **Up to 3× faster** than Blackbird on the same hardware
+- **Zero external dependencies at runtime** — site data is compiled into the binary via metaprogramming
+- **Two interaction modes** — a traditional CLI and an interactive terminal UI built with [Bubble Tea](https://github.com/charmbracelet/bubbletea)
+
+## Performance Benchmarks
+
+Benchmarked on Arch Linux with an AMD Ryzen 7 5000 Series CPU and 16 GB RAM.
+
+| Database | Average Execution Time |
+|---|---|
+| WhatsMyName | ~21 seconds |
+| Sherlock | ~12 seconds |
+| Maigret | ~33 seconds |
+
+## Two Modes of Operation
+
+**CLI mode** accepts a positional username argument along with optional flags and streams results directly to your terminal as each match is discovered.
+
+**TUI mode** (`--tui`) launches a full-screen Bubble Tea interface that guides you through three phases: entering a username, selecting a database from an interactive list, and watching a live progress bar before displaying results in a sortable table.
+
+<Warning>
+  Vesper is intended for **educational and ethical use only**. Only search for usernames you have explicit permission to investigate. The author is not responsible for any misuse, illegal activity, or harm caused by this tool. Always comply with the terms of service of any site you query and with applicable laws in your jurisdiction.
+</Warning>
+
+## License
+
+Vesper is MIT-licensed and written entirely in Go. Contributions, bug reports, and feature requests are welcome on [GitHub](https://github.com/ppmpreetham/vesper).
+
+## Get Started
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Download a pre-built binary or build from source for Linux, macOS, or Windows.
+  </Card>
+  <Card title="Quickstart" icon="bolt" href="/quickstart">
+    Run your first username search in under a minute.
+  </Card>
+  <Card title="CLI Reference" icon="terminal" href="/usage/cli">
+    Every flag, argument, and option explained with examples.
+  </Card>
+  <Card title="TUI Mode" icon="display" href="/usage/tui">
+    Use the interactive terminal interface for a guided search experience.
+  </Card>
+</CardGroup>

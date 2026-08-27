@@ -1,0 +1,162 @@
+---
+title: "Using Vesper from the Command Line"
+sidebarTitle: "CLI Mode"
+description: "Run Vesper from your terminal to search usernames across hundreds of websites. Learn positional arguments, database selection, timeout tuning, and reading results."
+---
+
+Vesper's CLI mode is the fastest way to run a username search: pass a username as the first argument, optionally specify a database and timeout, and Vesper will fan out 250 concurrent goroutine workers to probe sites and stream matches back to your terminal in real time.
+
+## Basic Syntax
+
+```bash
+vesper <username> [options]
+```
+
+The `<username>` argument is required and must be the first positional argument. Vesper reads it via `flag.Arg(0)` after all flags have been parsed. If you omit it, Vesper prints an error and the usage message, then exits without making any network requests.
+
+<Note>
+On Windows, replace `./vesper` with `vesper.exe` in every command shown in this section. All flags and arguments behave identically across platforms.
+</Note>
+
+## Flags Reference
+
+<ParamField path="username" type="string" required>
+  The username to search for across all sites in the selected database. Must be the first positional argument — not a named flag.
+
+  ```bash
+  ./vesper johndoe
+  ```
+</ParamField>
+
+<ParamField query="--database" type="string" default="whatsmyname">
+  Short form: `-d`. Selects the site database to query. Accepted values are `whatsmyname`, `sherlock`, `maigret`, and `all`. When omitted (or set to an empty string), Vesper defaults to `whatsmyname`.
+
+  - `whatsmyname` — stable, recommended, lowest false-positive rate (~21 s avg)
+  - `sherlock` — fastest (~12 s avg), higher false-positive rate
+  - `maigret` — broadest coverage (~33 s avg), highest false-positive rate
+  - `all` — runs Sherlock → WhatsMyName → Maigret sequentially
+
+  ```bash
+  ./vesper -d sherlock johndoe
+  ./vesper --database all johndoe
+  ```
+</ParamField>
+
+<ParamField query="--timeout" type="integer" default="7">
+  Short form: `-t`. Per-request HTTP timeout in seconds. Accepts integers in the range **1–60**. Higher values catch slow CDN-backed sites at the cost of longer total run time. Lower values finish sooner but may miss sites with sluggish response times.
+
+  ```bash
+  ./vesper --timeout 10 johndoe
+  ./vesper -t 3 johndoe
+  ```
+</ParamField>
+
+<ParamField query="--tui" type="boolean" default="false">
+  Launches Vesper's interactive terminal UI instead of running in plain CLI mode. When this flag is present, all other CLI flags except `--tui` itself are ignored — the TUI collects username, database, and uses the default 7 s timeout internally. See [TUI Mode](/usage/tui) for full details.
+
+  ```bash
+  ./vesper --tui
+  ```
+</ParamField>
+
+<ParamField query="--version" type="boolean" default="false">
+  Short form: `-v`. Prints the current Vesper version string and exits immediately.
+
+  ```bash
+  ./vesper --version
+  # Vesper version 1.0.0
+  ```
+</ParamField>
+
+<ParamField query="--help" type="boolean" default="false">
+  Short form: `-h`. Prints the usage message listing all flags and available database names, then exits.
+
+  ```bash
+  ./vesper --help
+  ```
+</ParamField>
+
+## Usage Examples
+
+<Tabs>
+  <Tab title="Basic search">
+    Search with the default `whatsmyname` database and default 7 s timeout:
+
+    ```bash
+    ./vesper johndoe
+    ```
+  </Tab>
+  <Tab title="Choose a database">
+    Specify a database with either the long or short flag:
+
+    ```bash
+    ./vesper --database sherlock johndoe
+    ./vesper -d maigret johndoe
+    ```
+  </Tab>
+  <Tab title="Custom timeout">
+    Combine database selection with a higher timeout for thorough results:
+
+    ```bash
+    ./vesper -d all --timeout 10 johndoe
+    ```
+  </Tab>
+  <Tab title="Version / help">
+    Print version information or the usage message:
+
+    ```bash
+    ./vesper --version
+    ./vesper --help
+    ```
+  </Tab>
+</Tabs>
+
+## Reading the Output
+
+As Vesper checks each site, it prints a line to standard output for every match it finds:
+
+```
+Found: GitHub at https://github.com/johndoe
+Found: GitLab at https://gitlab.com/johndoe
+```
+
+Each line starts with the green label `Found:`, followed by the site name and the full profile URL. Lines appear as soon as a worker reports a hit — results are not buffered until the end.
+
+### Single-database summary
+
+After all workers finish, Vesper prints a one-line summary showing total elapsed time and how many sites returned a match:
+
+```
+Execution completed in 21.4s
+Found username on 4 sites
+```
+
+### Multi-database summary (`--database all`)
+
+When `--database all` is used, Vesper runs three searches sequentially (Sherlock → WhatsMyName → Maigret) and prints a per-database breakdown:
+
+```
+=== Summary ===
+Execution completed in 1m6.2s
+Total found username on 11 sites across all databases
+  - Sherlock: 5 matches
+  - WhatsMyName: 4 matches
+  - Maigret: 2 matches
+```
+
+## Error Cases
+
+<CardGroup cols={2}>
+  <Card title="Missing username" icon="triangle-exclamation">
+    Running `./vesper` with no positional argument prints a red error message — `Error: Username is required` — followed by the usage text, then exits without making any network calls.
+  </Card>
+  <Card title="Timeout out of range" icon="clock">
+    If `--timeout` is below 1 or above 60, Vesper prints `Error: Timeout must be between 1 and 60 seconds` and exits before starting any search.
+  </Card>
+  <Card title="Unknown database" icon="database">
+    Passing an unrecognised value to `--database` (e.g., `--database foobar`) prints `Unknown database: foobar` followed by the list of valid options — `sherlock, whatsmyname, maigret, all` — and returns without performing any search.
+  </Card>
+  <Card title="--help or --version" icon="circle-info">
+    These flags cause Vesper to print their output and exit cleanly with no error. No username is required when either flag is present.
+  </Card>
+</CardGroup>

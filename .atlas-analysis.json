@@ -1,0 +1,68 @@
+{
+  "projectType": "cli-tool",
+  "projectName": "Vesper",
+  "projectDescription": "A blazingly-fast OSINT CLI tool that hunts usernames across the internet by fusing the WhatsMyName, Sherlock, and Maigret databases with high-concurrency Go workers.",
+  "theme": "aspen",
+  "primaryColor": "#7C3AED",
+  "lightColor": "#A78BFA",
+  "darkColor": "#4C1D95",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Usage",
+            "pages": [
+              "usage/cli",
+              "usage/tui",
+              "usage/databases",
+              "usage/performance-tips"
+            ]
+          },
+          {
+            "group": "Reference",
+            "pages": [
+              "reference/flags",
+              "reference/databases",
+              "reference/configuration"
+            ]
+          },
+          {
+            "group": "Contributing",
+            "pages": [
+              "contributing/building",
+              "contributing/architecture"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Up to 3x faster than competing OSINT tools like Blackbird",
+    "250 concurrent goroutine workers for parallel site checking",
+    "Three integrated databases: WhatsMyName, Sherlock, and Maigret",
+    "Interactive TUI mode powered by Bubble Tea with real-time progress",
+    "Configurable HTTP timeout for speed vs. thoroughness tradeoffs",
+    "Cross-platform: pre-built binaries for Linux, macOS, and Windows (amd64 & arm64)",
+    "UPX-compressed release binaries for minimal footprint",
+    "Single binary, zero runtime dependencies"
+  ],
+  "publicApiSurface": [
+    "vesper <username>",
+    "vesper --tui",
+    "vesper -d / --database <whatsmyname|sherlock|maigret|all>",
+    "vesper -t / --timeout <seconds>",
+    "vesper -v / --version",
+    "vesper -h / --help"
+  ]
+}

@@ -1,0 +1,327 @@
+---
+title: "Vesper Database Schema and Site Detection Reference"
+sidebarTitle: "Database Schema"
+description: "Technical reference for Vesper's three embedded site databases — WhatsMyName, Sherlock, and Maigret — including site entry field definitions and detection logic."
+---
+
+Vesper ships with three site databases compiled directly into the binary. Rather than reading JSON at runtime, raw database files under `raw databases/` are pre-processed by metaprogramming scripts (`metaprogramming/generateWhatsmyname.go`, `generateSherlockSites.go`, `generateMaigret.go`) that emit Go source files — `sites/whatsmynameSites.go`, `sites/sherlockSites.go`, and `sites/maigretSites.go` — which declare fully initialized Go maps and slices. This means zero I/O overhead at startup and no external file dependencies in the compiled binary.
+
+Each database has its own site entry schema and its own detection logic implemented in `tools/checher.go`. Understanding these schemas lets you reason about why Vesper reports a username as `FOUND`, `NOT FOUND`, `ERROR`, or `DISABLED` for any given site.
+
+<Note>
+  WhatsMyName and Sherlock use `%s` as the username placeholder in URL templates (standard Go `fmt.Sprintf` syntax). Maigret uses `{username}` as its placeholder, which Vesper replaces via `strings.ReplaceAll`.
+</Note>
+
+## Database Schemas
+
+<Tabs>
+  <Tab title="WhatsMyName">
+    The `WhatsmynameSiteData` struct (defined in `sites/whatsmyname.go`) represents a single site in the WhatsMyName database. Sites are stored as a flat slice (`[]WhatsmynameSiteData`) in `sites/whatsmynameSites.go`.
+
+    ### Fields
+
+    <ParamField body="name" type="string" required>
+      Human-readable name of the site (e.g., `"Twitter"`, `"GitHub"`). Used as the display label in output and TUI results.
+    </ParamField>
+
+    <ParamField body="uri_check" type="string" required>
+      URL template for the user's profile page. Contains `%s` as the placeholder for the username. Vesper substitutes the username with `fmt.Sprintf(site.URICheck, username)`.
+
+      **Example:** `"https://www.reddit.com/user/%s"`
+    </ParamField>
+
+    <ParamField body="uri_pretty" type="string">
+      Optional alternative URL for display purposes — a cleaner or more human-readable form of `uri_check`. If omitted, the `uri_check` value is shown instead.
+    </ParamField>
+
+    <ParamField body="post_body" type="string">
+      Optional POST body to send with the request. Only used for sites that require a POST to check profile existence.
+    </ParamField>
+
+    <ParamField body="e_code" type="integer" required>
+      Expected HTTP status code when the user **exists** on the site (e.g., `200`). Used as part of the FOUND condition.
+    </ParamField>
+
+    <ParamField body="e_string" type="string" required>
+      A string that must be present in the response body when the user **exists**. Used as the primary presence indicator.
+    </ParamField>
+
+    <ParamField body="m_string" type="string" required>
+      A string that, when present in the response body, indicates the user does **not** exist (the "miss string"). Acts as a veto: even if `e_string` matches, if `m_string` is also found, the result is `NOT FOUND`.
+    </ParamField>
+
+    <ParamField body="m_code" type="integer" required>
+      HTTP status code returned when the user does **not** exist. Used as a secondary miss condition alongside `m_string`.
+    </ParamField>
+
+    <ParamField body="known" type="[]string" required>
+      A list of usernames that are known to exist on this site. Used for validation and testing to confirm the site detection logic is working correctly.
+    </ParamField>
+
+    <ParamField body="cat" type="string" required>
+      Category label for the site. Examples: `"social"`, `"gaming"`, `"coding"`, `"finance"`. Used for informational grouping — Vesper does not filter by category at runtime.
+    </ParamField>
+
+    <ParamField body="strip_bad_char" type="string">
+      Optional. If set, bad characters that should be stripped from the username before constructing the check URL.
+    </ParamField>
+
+    <ParamField body="headers" type="map[string]string">
+      Optional map of custom HTTP request headers to send with the check request. Useful for sites that require specific `Accept` or `Authorization` headers.
+    </ParamField>
+
+    <ParamField body="protection" type="[]string">
+      Optional list of protection mechanisms the site employs (e.g., `"cloudflare"`). Informational only — Vesper does not bypass protections at runtime.
+    </ParamField>
+
+    ### Detection Logic
+
+    `WhatsMyNameCheckURL()` in `tools/checher.go` evaluates three conditions against the HTTP response:
+
+    ```go
+    if strings.Contains(bodyStr, site.EString) && site.ECode == resp.StatusCode {
+        if !strings.Contains(bodyStr, site.MString) {
+            mCodeCondition := site.MCode == site.ECode || site.MCode != resp.StatusCode
+            if mCodeCondition {
+                result.Status = "FOUND"
+            }
+        }
+    }
+    ```
+
+    A result is marked **`FOUND`** only when **all** of the following are true:
+    1. The response body **contains** `e_string`
+    2. The HTTP status code **equals** `e_code`
+    3. The response body does **not contain** `m_string`
+
+    Any other combination produces `NOT FOUND`. Network errors produce `ERROR`.
+  </Tab>
+
+  <Tab title="Sherlock">
+    The `SherlockSiteData` struct (defined in `sites/sherlock.go`) represents a single site in the Sherlock database. Sites are stored as a map (`map[string]SherlockSiteData`) keyed by site name in `sites/sherlockSites.go`.
+
+    ### Fields
+
+    <ParamField body="url" type="string" required>
+      URL template for the user's profile page. Uses `%s` as the username placeholder. Used as both the display URL and the check URL unless `urlProbe` is set.
+
+      **Example:** `"https://github.com/%s"`
+    </ParamField>
+
+    <ParamField body="urlMain" type="string" required>
+      The main homepage URL for the site (no username). Used for display and reference only.
+    </ParamField>
+
+    <ParamField body="urlProbe" type="string">
+      Optional alternate URL to send the HTTP request to instead of `url`. Useful when the main profile URL requires authentication or returns inconsistent results, but a separate probe endpoint reliably indicates existence.
+    </ParamField>
+
+    <ParamField body="errorType" type="string" required>
+      The detection method Vesper uses to determine whether a username exists. One of three values:
+
+      | Value | Detection Approach |
+      |---|---|
+      | `status_code` | Checks the HTTP response status code against `errorCode` |
+      | `message` | Searches the response body for strings in `errorMsg` |
+      | `response_url` | Compares the final (post-redirect) URL against `errorUrl` |
+    </ParamField>
+
+    <ParamField body="errorMsg" type="[]string or string">
+      One or more strings that, when found in the response body, indicate the user does **not** exist. Only evaluated when `errorType` is `"message"`. The raw JSON value may be either a single string or an array of strings — Vesper's custom `ErrorMessage` unmarshaler normalizes both into `[]string`.
+    </ParamField>
+
+    <ParamField body="errorCode" type="integer" default="404">
+      The HTTP status code that indicates the user does **not** exist. Only evaluated when `errorType` is `"status_code"`. Defaults to `404` if omitted or set to `0`.
+    </ParamField>
+
+    <ParamField body="errorUrl" type="string">
+      The URL (after any redirects) that indicates the user does **not** exist. Only evaluated when `errorType` is `"response_url"`. Vesper compares `resp.Request.URL.String()` against this value.
+    </ParamField>
+
+    <ParamField body="regexCheck" type="string">
+      Optional regular expression that the username must match before a request is made. If the username does not match, the result is immediately set to `"USERNAME CAN'T BE MADE"` without any HTTP request being sent.
+    </ParamField>
+
+    <ParamField body="username_claimed" type="string" required>
+      A username that is known to exist on this site. Used for validation and testing purposes.
+    </ParamField>
+
+    <ParamField body="isNSFW" type="bool" default="false">
+      Marks the site as NSFW (Not Safe For Work). Informational only — Vesper does not filter out NSFW sites during enumeration.
+    </ParamField>
+
+    <ParamField body="headers" type="map[string]string">
+      Optional map of custom HTTP request headers to include with the check request.
+    </ParamField>
+
+    <ParamField body="request_method" type="string" default="GET">
+      The HTTP method to use for the check request. Defaults to `"GET"` if omitted or empty.
+    </ParamField>
+
+    <ParamField body="request_payload" type="interface{}">
+      Optional POST body payload template. Only applied when `request_method` is `"POST"`. If the payload is a string, Vesper formats it with `fmt.Sprintf(payloadStr, username)` to substitute the username.
+    </ParamField>
+
+    ### Detection Logic
+
+    `SherlockCheckURL()` in `tools/checher.go` dispatches on `errorType`:
+
+    ```go
+    switch site.ErrorType {
+    case "status_code":
+        errorCode := 404
+        if site.ErrorCode != 0 {
+            errorCode = site.ErrorCode
+        }
+        if resp.StatusCode == errorCode {
+            result.Status = "NOT FOUND"
+        } else {
+            result.Status = "FOUND"
+        }
+    case "message":
+        for _, errMsg := range errorMessages {
+            if strings.Contains(bodyStr, errMsg) {
+                foundError = true
+                break
+            }
+        }
+        if foundError {
+            result.Status = "NOT FOUND"
+        } else {
+            result.Status = "FOUND"
+        }
+    case "response_url":
+        if resp.Request.URL.String() == site.ErrorURL {
+            result.Status = "NOT FOUND"
+        } else {
+            result.Status = "FOUND"
+        }
+    }
+    ```
+
+    | `errorType` | FOUND condition | NOT FOUND condition |
+    |---|---|---|
+    | `status_code` | Status code ≠ `errorCode` | Status code == `errorCode` (default 404) |
+    | `message` | No `errorMsg` string found in body | Any `errorMsg` string found in body |
+    | `response_url` | Final URL ≠ `errorUrl` | Final URL == `errorUrl` |
+  </Tab>
+
+  <Tab title="Maigret">
+    The `MaigretSiteData` struct (defined inline in `sites/maigretSites.go`) represents a single site in the Maigret database. Sites are stored as a map (`map[string]MaigretSiteData`) keyed by site name.
+
+    ### Fields
+
+    <ParamField body="url" type="*string">
+      Pointer to the URL template for the user's profile page. Uses `{username}` as the placeholder, substituted via `strings.ReplaceAll`. If `nil`, the site check immediately returns `ERROR`.
+
+      **Example:** `"https://venmo.com/{username}"`
+    </ParamField>
+
+    <ParamField body="urlMain" type="*string">
+      Optional pointer to the site's main homepage URL (no username). Informational only.
+    </ParamField>
+
+    <ParamField body="urlProbe" type="*string">
+      Optional pointer to an alternate probe URL. If set, Vesper sends the HTTP request to this URL (with `{username}` substituted) instead of `url`. The `url` value is still used as the result's display URL.
+    </ParamField>
+
+    <ParamField body="checkType" type="*string" default="status_code">
+      Pointer to the detection method. Either `"status_code"` or `"message"`. Defaults to `"status_code"` if `nil`.
+    </ParamField>
+
+    <ParamField body="presenceStrs" type="[]string">
+      Strings that, when found in the response body, indicate the user **exists**. Only evaluated when `checkType` is `"message"`. Also aliased as `presenseStrs` (note: typo preserved from the original upstream data) — Vesper checks both fields.
+    </ParamField>
+
+    <ParamField body="absenceStrs" type="[]string">
+      Strings that, when found in the response body, indicate the user does **not** exist. Acts as a veto over `presenceStrs`: if an absence string is found, the result is `NOT FOUND` regardless of presence strings.
+    </ParamField>
+
+    <ParamField body="regexCheck" type="*string">
+      Optional pointer to a regular expression the username must match. If the username does not match, the result is immediately set to `"USERNAME CAN'T BE MADE"` with no HTTP request sent.
+    </ParamField>
+
+    <ParamField body="disabled" type="*bool" default="false">
+      If `true`, the site is skipped entirely. Vesper returns `"DISABLED"` as the status and makes no HTTP request. Disabled entries exist in the compiled data but are never checked.
+    </ParamField>
+
+    <ParamField body="tags" type="[]string">
+      Optional list of category or region tags (e.g., `["finance", "us"]`). Informational only.
+    </ParamField>
+
+    <ParamField body="alexaRank" type="*int">
+      Optional Alexa traffic rank for the site. Informational only.
+    </ParamField>
+
+    <ParamField body="engine" type="*string">
+      Optional CMS or platform engine identifier (e.g., `"uCoz"`). Informational only.
+    </ParamField>
+
+    <ParamField body="usernameClaimed" type="*string">
+      A username known to exist on the site. Used for validation and testing.
+    </ParamField>
+
+    <ParamField body="usernameUnclaimed" type="*string">
+      A username known **not** to exist on the site. Used for negative validation.
+    </ParamField>
+
+    ### Detection Logic
+
+    `MaigretCheckURL()` in `tools/checher.go` first handles two short-circuit conditions before making any HTTP request:
+
+    ```go
+    // Skip disabled sites
+    if site.Disabled != nil && *site.Disabled {
+        result.Status = "DISABLED"
+        return result
+    }
+
+    // Validate username format
+    if site.RegexCheck != nil {
+        matched, err := regexp.MatchString(*site.RegexCheck, username)
+        if err != nil || !matched {
+            result.Status = "USERNAME CAN'T BE MADE"
+            return result
+        }
+    }
+    ```
+
+    After the HTTP request, it dispatches on `checkType`:
+
+    ```go
+    switch checkType {
+    case "status_code":
+        if resp.StatusCode == 200 {
+            result.Status = "FOUND"
+        } else {
+            result.Status = "NOT FOUND"
+        }
+    case "message":
+        // Check presenceStrs (and presenseStrs typo variant)
+        // Check absenceStrs as veto
+        // Fall back to status 200 if no strings match
+    }
+    ```
+
+    | `checkType` | FOUND condition | NOT FOUND condition |
+    |---|---|---|
+    | `status_code` | HTTP status == 200 | HTTP status ≠ 200 |
+    | `message` | Any presence string found **and** no absence string found | Absence string found, or no presence string found (falls back to status check) |
+
+    <Note>
+      The Maigret database contains a known typo: some site entries use `presenseStrs` instead of `presenceStrs`. Vesper checks **both** field names in sequence so that no sites are silently skipped due to the upstream typo.
+    </Note>
+  </Tab>
+</Tabs>
+
+## Status Values
+
+All three databases return one of the following status strings from their respective `CheckURL` functions:
+
+| Status | Meaning |
+|---|---|
+| `FOUND` | The username exists on this site according to the detection logic |
+| `NOT FOUND` | The username does not exist on this site |
+| `ERROR` | The HTTP request failed (network error, server 5xx, or `nil` URL) |
+| `DISABLED` | The site entry has `disabled: true` — no request was made (Maigret only) |
+| `USERNAME CAN'T BE MADE` | The username failed the `regexCheck` constraint — no request was made (Sherlock and Maigret) |

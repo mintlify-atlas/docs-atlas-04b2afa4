@@ -1,0 +1,306 @@
+---
+title: "Vesper Internals: Architecture and Code Structure"
+sidebarTitle: "Architecture"
+description: "Explore Vesper's internals: goroutine worker pools, the Bubble Tea TUI pipeline, site detection schemas, and the metaprogramming code-generation system."
+---
+
+Vesper is structured as a small, focused Go module where each package has a single responsibility. The entry point dispatches between two runtime modes — a classic CLI path and an interactive Bubble Tea TUI path — but both modes share identical runner logic and HTTP checking functions. Understanding how these pieces fit together makes it straightforward to extend a database, add a new detection strategy, or wire in a new output format.
+
+## Package Layout
+
+```text
+vesper/
+├── main.go                     # Entry point: --tui dispatch, flags.Parse(), runner.RunEnumeration()
+├── cmd/
+│   ├── flags/flags.go          # CLI flag definitions (flag package)
+│   ├── runner/
+│   │   ├── runner.go           # RunEnumeration(), RunAllDatabases(), database routing
+│   │   ├── sherlock.go         # RunSherlockDatabase() — 250-worker goroutine pool
+│   │   ├── whatsmyname.go      # RunWhatsMyNameDatabase() — same pool pattern
+│   │   └── maigret.go          # RunMaigretDatabase() — same pool pattern
+│   ├── output/output.go        # PrintSummary() — final results to stdout
+│   └── tui/
+│       ├── model.go            # Model — username input + database list (Bubble Tea)
+│       ├── progress.go         # ProgressModel — live progress bar + found counter
+│       ├── table.go            # TableModel — scrollable results table
+│       └── runner.go           # RunTUI() — three-phase TUI orchestration
+├── pkg/types/types.go          # Config, JobResult, SherlockJob, MaigretJob
+├── sites/
+│   ├── whatsmyname.go          # WhatsmynameSiteData struct + loader
+│   ├── sherlock.go             # SherlockSiteData struct + loader
+│   ├── whatsmynameSites.go     # Generated: var WhatsmynameSites []WhatsmynameSiteData
+│   ├── sherlockSites.go        # Generated: var SherlockSites map[string]SherlockSiteData
+│   └── maigretSites.go         # Generated: var MaigretSites map[string]MaigretSiteData
+├── tools/
+│   ├── checher.go              # WhatsMyNameCheckURL(), SherlockCheckURL(), MaigretCheckURL()
+│   ├── callback.go             # SetFoundCallback(), SetProgressCallback(), NotifyFound(), NotifyProgress()
+│   └── colors.go               # Terminal color helpers (fatih/color wrappers)
+└── metaprogramming/
+    ├── generateWhatsmyname.go  # JSON → Go slice for WhatsmynameSites
+    ├── generateSherlockSites.go# JSON → Go map for SherlockSites
+    └── generateMaigret.go      # JSON → Go map for MaigretSites
+```
+
+### Shared types (`pkg/types`)
+
+`pkg/types/types.go` holds the data structures that cross package boundaries:
+
+```go
+type Config struct {
+    Database   string  // "whatsmyname" | "sherlock" | "maigret" | "all" | ""
+    Timeout    int     // HTTP timeout seconds, default 7
+    NumWorkers int     // goroutine pool size, default 250
+    BufferSize int     // channel buffer depth, default 1000
+}
+
+type JobResult struct {
+    DatabaseName string
+    FoundCount   int
+}
+
+type SherlockJob struct {
+    Name string
+    Data sites.SherlockSiteData
+}
+
+type MaigretJob struct {
+    Name string
+    Data sites.MaigretSiteData
+}
+```
+
+`WhatsMyName` jobs pass `sites.WhatsmynameSiteData` directly by value on a channel; Sherlock and Maigret wrap the site data in a `Job` struct that also carries the map key (site name) because their site data is stored as `map[string]SiteData`.
+
+## Goroutine Worker Pool
+
+Every database runner follows an identical producer–worker–consumer pattern. The following pseudocode shows the structure as it appears in `cmd/runner/sherlock.go`, `whatsmyname.go`, and `maigret.go`:
+
+```go
+func RunXxxDatabase(username string, config types.Config) int {
+    var wg sync.WaitGroup
+    jobs    := make(chan JobType,          config.BufferSize) // 1000
+    results := make(chan tools.ReturnData, config.BufferSize) // 1000
+
+    // 1. Spawn 250 worker goroutines
+    for i := 0; i < config.NumWorkers; i++ { // 250
+        wg.Add(1)
+        go func() {
+            defer wg.Done()
+            for job := range jobs {
+                result := tools.XxxCheckURL(username, job.Data, job.Name)
+                results <- result
+
+                sitesCheckedMutex.Lock()
+                sitesChecked++
+                current := sitesChecked
+                sitesCheckedMutex.Unlock()
+                tools.NotifyProgress(current) // → TUI or no-op
+            }
+        }()
+    }
+
+    // 2. Feed goroutine: push all site entries, then close jobs
+    go func() {
+        for name, site := range sites.XxxSites {
+            jobs <- JobType{Name: name, Data: site}
+        }
+        close(jobs)
+    }()
+
+    // 3. Collector goroutine: wait for all workers, then close results
+    go func() {
+        wg.Wait()
+        close(results)
+    }()
+
+    // 4. Main goroutine: drain results, print / notify on FOUND
+    foundCount := 0
+    for result := range results {
+        if result.Status == "FOUND" {
+            foundCount++
+            handled := tools.NotifyFound(result.Name, result.URL)
+            if !handled {
+                // CLI mode: print directly
+                tools.Green("Found: ")
+                fmt.Print(result.Name, " at ")
+                tools.BoldGreen(result.URL + "\n")
+            }
+        }
+    }
+    return foundCount
+}
+```
+
+<Accordion title="Why 250 workers and a buffer of 1000?">
+  Most of a username-check request is spent waiting on network I/O, not CPU work. With 250 goroutines the scheduler keeps the network saturated even when many requests are blocked on DNS resolution or slow servers. The 1000-slot channel buffer prevents the feed goroutine from blocking when workers are momentarily busy, and prevents workers from blocking on the results channel when the main goroutine is handling a batch of FOUND results.
+</Accordion>
+
+## Site Detection Logic
+
+Each database uses a different HTTP response interpretation strategy, reflected in the three `tools.XxxCheckURL()` functions in `tools/checher.go`.
+
+<Tabs>
+  <Tab title="WhatsMyName">
+    `WhatsMyNameCheckURL()` performs a simple `GET` against `site.URICheck` (a `%s` format string for the username) and applies three simultaneous conditions:
+
+    1. **Status code match** — `resp.StatusCode == site.ECode`
+    2. **Presence string** — `body` contains `site.EString`
+    3. **Absence of miss-string** — `body` does NOT contain `site.MString`
+
+    All three conditions must hold for the result to be `FOUND`. An optional `MCode` provides a secondary status-code check for ambiguous cases.
+  </Tab>
+
+  <Tab title="Sherlock">
+    `SherlockCheckURL()` supports three `ErrorType` modes declared per site:
+
+    | `ErrorType` | Detection logic |
+    |---|---|
+    | `status_code` | Response code ≠ `errorCode` (default 404) → FOUND |
+    | `message` | Body does NOT contain any string in `errorMsg[]` → FOUND |
+    | `response_url` | Final request URL ≠ `errorUrl` (redirect detection) → FOUND |
+
+    Before the HTTP request, a `RegexCheck` field (if non-empty) validates that the username format is legal for the site. Invalid usernames are returned with status `USERNAME CAN'T BE MADE` and skipped. Sites may also specify a `URLProbe` for the check URL, `RequestMethod` for `POST` requests, and per-site `Headers`.
+  </Tab>
+
+  <Tab title="Maigret">
+    `MaigretCheckURL()` first skips any site where `site.Disabled == true`. It then supports two `CheckType` modes:
+
+    | `CheckType` | Detection logic |
+    |---|---|
+    | `status_code` | HTTP 200 → FOUND, anything else → NOT FOUND |
+    | `message` | At least one `presenceStrs` / `presenseStrs` match AND no `absenceStrs` match → FOUND |
+
+    The `message` mode falls back to a status-code check when neither presence nor absence strings produce a match. Maigret sites use `{username}` placeholder syntax (not `%s`) in URL templates.
+  </Tab>
+</Tabs>
+
+## TUI Pipeline
+
+The TUI is built on [Bubble Tea](https://github.com/charmbracelet/bubbletea), an Elm-inspired framework where each screen is an independent `tea.Model` with its own `Init / Update / View` cycle. `cmd/tui/runner.go` orchestrates three sequential Bubble Tea programs:
+
+<Steps>
+  <Step title="Phase 1 — Input collection (Model)">
+    `tui.Initialize()` creates a `Model` with two internal states: `stateUsername` (a `textinput.Model`) and `stateDatabase` (a `list.Model` with four entries: `whatsmyname`, `sherlock`, `maigret`, `all`). The user presses **Enter** to advance from the username field to the database list, then **Enter** again to confirm. On confirmation the model sets `ready = true` and calls `tea.Quit`, returning control to `RunTUI()` via `m.GetSelections()`.
+  </Step>
+
+  <Step title="Phase 2 — Enumeration with live progress (ProgressModel)">
+    `tui.NewProgressModel()` is initialized with the username, database name, and `Config`. Its `Init()` immediately schedules two `tea.Cmd` values via `tea.Batch`:
+
+    - `tickCmd()` — fires every 100 ms to keep the event loop alive.
+    - `runEnumeration(...)` — runs in a Bubble Tea goroutine; calls the appropriate `runner.RunXxxDatabase()` function(s) and returns a `doneMsg` when complete.
+
+    While `runEnumeration` is running, the worker goroutines call `tools.NotifyProgress(n)` and `tools.NotifyFound(name, url)`. These are routed back to the Bubble Tea program via `globalProgram.Send(progressSiteMsg{...})` and a buffered `FoundResultsChan` channel, updating the animated progress bar and live "Found N profiles so far" counter in real time.
+
+    For `--database all`, the progress model advances through three sequential steps (Sherlock → WhatsMyName → Maigret), scheduling a new `runEnumeration` call for each step when the previous `doneMsg` arrives.
+  </Step>
+
+  <Step title="Phase 3 — Results table (TableModel)">
+    After the final `doneMsg`, `ProgressModel` sets `done = true`. The user presses any key to exit the progress program. If `len(foundResults) > 0`, `RunTUI()` creates a `tui.NewTableModel(foundResults)` and runs a third Bubble Tea program. The table displays two columns — **Site** (30 chars) and **URL** (70 chars) — using the `charmbracelet/bubbles/table` component with keyboard navigation. If no results were found, the table program is skipped and a plain text message is printed instead.
+  </Step>
+</Steps>
+
+## Callback System
+
+The callback system in `tools/callback.go` is the bridge that allows the same runner functions to serve both CLI mode (direct stdout printing) and TUI mode (message passing into the Bubble Tea program) without any conditional logic in the runners themselves.
+
+```go
+var (
+    foundCallback    func(name, url string)
+    progressCallback func(sitesChecked int)
+    callbackLock     sync.Mutex
+)
+
+// TUI runner registers these before starting enumeration:
+func SetFoundCallback(fn func(name, url string))
+func SetProgressCallback(fn func(sitesChecked int))
+
+// Worker goroutines call these — they are safe from any goroutine:
+func NotifyFound(name, url string) bool   // returns false if no callback → CLI prints directly
+func NotifyProgress(sitesChecked int)     // no-op if no callback set
+```
+
+<Tip>
+  The dual-mode design is the key insight: `NotifyFound()` returns `false` when no callback is registered. Runner code checks this return value and falls back to printing directly with `tools.Green()` / `tools.BoldGreen()`. This means CLI mode and TUI mode share 100% of the HTTP checking and concurrency logic — the only difference is whether a callback is installed before `RunEnumeration()` is called.
+</Tip>
+
+All four callback functions acquire `callbackLock` (a `sync.Mutex`) before reading or writing the function pointers, making the callback registry safe to call from the 250 concurrent worker goroutines without data races.
+
+## Metaprogramming: Database Generation
+
+Embedding site data as Go source eliminates runtime file I/O and makes the binary fully self-contained — there are no external config files to distribute alongside the executable.
+
+The generation pipeline for each database follows the same pattern:
+
+```text
+raw databases/<db>/<db>.json          (upstream, may be incomplete or inconsistent)
+        │
+        ▼  (manual pre-processing / cleaning)
+raw databases/<db>/<db>_fix.json      (cleaned, used as generator input)
+        │
+        ▼  go run metaprogramming/generateXxx.go <input> [output]
+sites/<db>Sites.go                    (// Code generated … DO NOT EDIT.)
+```
+
+The generated files declare package-level variables:
+
+```go
+// sites/whatsmynameSites.go
+var WhatsmynameSites = []WhatsmynameSiteData{ /* ... */ }
+
+// sites/sherlockSites.go
+var SherlockSites = map[string]SherlockSiteData{ /* ... */ }
+
+// sites/maigretSites.go
+var MaigretSites = map[string]MaigretSiteData{ /* ... */ }
+```
+
+These are referenced directly by the runner functions (`sites.SherlockSites`, `sites.WhatsmynameSites`, `sites.MaigretSites`), the TUI progress model (to compute `totalSites`), and the `runEnumeration` Tea command.
+
+## Entry Point Dispatch
+
+`main.go` resolves the CLI/TUI split with a two-pass flag parse:
+
+```go
+func main() {
+    tools.PrintLogo()
+
+    // First pass: check only --tui
+    useTUIPtr := flag.Bool("tui", false, "Use interactive TUI interface")
+    flag.Parse()
+    flag.CommandLine = flag.NewFlagSet("", flag.ExitOnError) // reset for second pass
+
+    if *useTUIPtr {
+        tui.RunTUI()   // TUI handles everything internally
+        return
+    }
+
+    // Second pass: full CLI flag parsing
+    config, username, shouldExit := flags.Parse()
+    if shouldExit { return }
+
+    tools.SetHTTPTimeout(time.Duration(config.Timeout) * time.Second)
+
+    startTime := time.Now()
+    results := runner.RunEnumeration(username, config)
+    output.PrintSummary(results, time.Since(startTime))
+}
+```
+
+The flag set is reset between passes so that `flags.Parse()` (which re-registers all flags including `--tui`) does not conflict with the first-pass `--tui` bool.
+
+## Explore Further
+
+<CardGroup cols={2}>
+  <Card title="CLI Usage" icon="terminal" href="/usage/cli">
+    Learn all CLI flags, database options, and timeout tuning for command-line enumeration.
+  </Card>
+  <Card title="TUI Mode" icon="window" href="/usage/tui">
+    Walk through the interactive terminal interface and its three-phase flow.
+  </Card>
+  <Card title="Databases" icon="database" href="/usage/databases">
+    Compare WhatsMyName, Sherlock, and Maigret detection strategies and site coverage.
+  </Card>
+  <Card title="Building from Source" icon="wrench" href="/contributing/building">
+    Prerequisites, build commands, metaprogramming generators, and cross-platform release builds.
+  </Card>
+</CardGroup>

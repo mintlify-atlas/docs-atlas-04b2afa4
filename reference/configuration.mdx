@@ -1,0 +1,154 @@
+---
+title: "Vesper Runtime Configuration and Defaults"
+sidebarTitle: "Configuration"
+description: "Reference for Vesper's runtime configuration values — worker concurrency, buffer size, timeout range, and HTTP client settings — with explanations of how each affects performance."
+---
+
+Vesper has no configuration file. All runtime behavior is controlled either by CLI flags at invocation time or by constants hardcoded in the source that require a recompile to change. The `Config` struct in `pkg/types/types.go` carries every setting through the call stack, from `flags.Parse()` or `tui.RunTUI()` all the way down to the goroutine worker pools in `cmd/runner/`.
+
+## Config Struct
+
+The `types.Config` struct is the single object passed to `runner.RunEnumeration()` and from there into each database runner. It is populated by `flags.Parse()` in CLI mode or hardcoded inline in `tui.RunTUI()` in TUI mode.
+
+```go
+type Config struct {
+    Database   string
+    Timeout    int
+    NumWorkers int
+    BufferSize int
+}
+```
+
+<ParamField body="Database" type="string" default='""'>
+  The name of the database to enumerate against. An empty string is treated as `"whatsmyname"` by the runner's switch statement. Valid values are `"whatsmyname"`, `"sherlock"`, `"maigret"`, and `"all"`.
+
+  Set via: `-d` / `--database` flag.
+</ParamField>
+
+<ParamField body="Timeout" type="int" default="7">
+  The per-request HTTP timeout in seconds. Passed to `tools.SetHTTPTimeout()` before enumeration starts, which updates the package-level `httpTimeout` variable consumed by every call to `NewHTTPClient()`. Valid range is 1–60 seconds; values outside this range are rejected by `flags.Parse()` before the config is used.
+
+  Set via: `-t` / `--timeout` flag.
+</ParamField>
+
+<ParamField body="NumWorkers" type="int" default="250">
+  The number of concurrent goroutine workers spawned by each database runner. Each worker pulls jobs from the shared `jobs` channel and writes results to the `results` channel. A higher count means more simultaneous outbound HTTP connections. This value is hardcoded and cannot be changed via a flag.
+
+  **Cannot be set at runtime.** Requires recompiling from source.
+</ParamField>
+
+<ParamField body="BufferSize" type="int" default="1000">
+  The buffer capacity of both the `jobs` channel and the `results` channel in each database runner. A buffer of 1000 means up to 1000 jobs can be queued before the producer goroutine blocks, and up to 1000 results can be pending before the consumer blocks. This value is hardcoded and cannot be changed via a flag.
+
+  **Cannot be set at runtime.** Requires recompiling from source.
+</ParamField>
+
+<Note>
+  `NumWorkers` and `BufferSize` are hardcoded to `250` and `1000` respectively in both `flags.Parse()` and `tui.RunTUI()`. They are deliberately excluded from the CLI flag surface to keep Vesper's interface simple. To change them, edit the constants in the relevant source file and recompile with `go build`.
+</Note>
+
+## HTTP Client Settings
+
+Every check — across all three databases — uses the shared HTTP client created by `tools.NewHTTPClient()` in `tools/checher.go`. The client is a package-level variable that is recreated when `tools.ResetHTTPClient()` is called.
+
+<Tip>
+  Vesper sets the `User-Agent` header to a real Firefox browser string on every request. Sites that return 403 or redirect bot traffic are more likely to respond normally when they see a legitimate browser UA. The user-agent is applied automatically in `executeRequest()` for any request that does not already have a `User-Agent` header set.
+</Tip>
+
+### HTTP Client Parameters
+
+| Parameter | Value | Notes |
+|---|---|---|
+| `Timeout` | `config.Timeout` seconds | Set by `-t` / `--timeout`; default 7s |
+| `DialContext.Timeout` | `config.Timeout` seconds | Applies to the TCP dial phase |
+| `DialContext.KeepAlive` | 30 seconds | TCP keep-alive interval |
+| `MaxIdleConns` | 100 | Total idle connections across all hosts |
+| `MaxIdleConnsPerHost` | 50 | Idle connections per individual host |
+| `IdleConnTimeout` | 30 seconds | How long an idle connection stays in the pool |
+| `DisableKeepAlives` | `false` | Keep-alive is enabled (connections are reused) |
+| `ForceAttemptHTTP2` | `false` | HTTP/2 is disabled; HTTP/1.1 is used |
+| `Resolver.PreferGo` | `true` | Uses Go's pure-Go DNS resolver |
+| `User-Agent` | `Mozilla/5.0 (X11; Linux x86_64; rv:129.0) Gecko/20100101 Firefox/129.0` | Applied per-request in `executeRequest()` |
+
+The full `NewHTTPClient()` implementation from `tools/checher.go`:
+
+```go
+func NewHTTPClient() *http.Client {
+    dialer := &net.Dialer{
+        Timeout:   httpTimeout,
+        KeepAlive: 30 * time.Second,
+        Resolver: &net.Resolver{
+            PreferGo: true,
+        },
+    }
+
+    return &http.Client{
+        Timeout: httpTimeout,
+        Transport: &http.Transport{
+            MaxIdleConns:        100,
+            MaxIdleConnsPerHost: 50,
+            IdleConnTimeout:     30 * time.Second,
+            DialContext:         dialer.DialContext,
+            DisableKeepAlives:   false,
+            ForceAttemptHTTP2:   false,
+        },
+    }
+}
+```
+
+## Connection Pool Reset
+
+When running with `--database all`, Vesper calls `tools.ResetHTTPClient()` between each of the three database runs (Sherlock → WhatsMyName → Maigret):
+
+```go
+tools.ResetHTTPClient()
+sherlockCount := RunSherlockDatabase(username, config)
+
+tools.ResetHTTPClient()
+wmnCount := RunWhatsMyNameDatabase(username, config)
+
+tools.ResetHTTPClient()
+maigretCount := RunMaigretDatabase(username, config)
+```
+
+`ResetHTTPClient()` closes all idle connections on the current client and replaces it with a fresh instance:
+
+```go
+func ResetHTTPClient() {
+    if httpClient != nil {
+        httpClient.CloseIdleConnections()
+    }
+    httpClient = NewHTTPClient()
+}
+```
+
+This prevents stale connections from a previous database run from interfering with the next one, particularly for sites that appear in multiple databases.
+
+## TUI Mode Configuration
+
+When launched with `--tui`, the TUI runner in `cmd/tui/runner.go` constructs its own `Config` directly, bypassing `flags.Parse()` entirely. The values are hardcoded:
+
+```go
+config := types.Config{
+    Database:   dbName,   // selected interactively in the TUI
+    Timeout:    7,        // always 7 seconds
+    NumWorkers: 250,      // always 250 workers
+    BufferSize: 1000,     // always 1000
+}
+```
+
+There is currently no way to change the timeout or worker count when using TUI mode without modifying and recompiling the source.
+
+## Default Values Summary
+
+| Setting | Default | Configurable at Runtime |
+|---|---|---|
+| Database | `""` (treated as `whatsmyname`) | Yes — `-d` / `--database` |
+| Timeout | `7` seconds | Yes — `-t` / `--timeout` (range: 1–60) |
+| NumWorkers | `250` | No — hardcoded |
+| BufferSize | `1000` | No — hardcoded |
+| HTTP/2 | Disabled | No — hardcoded |
+| User-Agent | Firefox 129 (Linux) | No — hardcoded |
+| MaxIdleConns | `100` | No — hardcoded |
+| MaxIdleConnsPerHost | `50` | No — hardcoded |
+| IdleConnTimeout | `30s` | No — hardcoded |

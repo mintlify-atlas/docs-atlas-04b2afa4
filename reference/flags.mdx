@@ -1,0 +1,170 @@
+---
+title: "Vesper CLI Flags and Options Reference"
+sidebarTitle: "Flags"
+description: "Complete reference for all Vesper command-line flags. Covers database selection, timeout configuration, TUI mode, version, and help, with defaults and valid ranges."
+---
+
+Vesper is controlled entirely through command-line flags and a single positional argument. There is no configuration file — every option is passed at invocation time. The two primary invocation patterns are the standard CLI mode, which accepts a username and optional flags, and the interactive TUI mode, which takes over the terminal and guides you through each step.
+
+## Invocation Syntax
+
+```bash
+vesper <username> [options]
+vesper --tui
+```
+
+In CLI mode, `<username>` must appear as the first non-flag argument. All option flags are optional and have sensible defaults. When `--tui` is specified, the TUI takes over and all other flags are ignored — the TUI collects the username and database selection interactively.
+
+## Full Help Output
+
+Running `vesper --help` or `vesper -h` prints the following usage block and exits immediately:
+
+```text
+Usage: vesper <username> [options] or vesper --tui
+Options:
+  --tui             Use the interactive terminal UI mode
+  -h, --help        Show this help message
+  -v, --version     Show version information
+  -d, --database    Enumerate using a specific database (default: whatsmyname)
+  -t, --timeout     HTTP request timeout in seconds (default: 7) (high for better results, more time)
+
+List of databases:
+    - whatsmyname (default)
+    - sherlock
+    - maigret
+    - all
+```
+
+<Note>
+  Every flag has both a short form (single dash, single letter) and a long form (double dash, full word). The two forms are completely equivalent — `-d sherlock` and `--database sherlock` produce identical behavior. The `--tui` flag has no short form.
+</Note>
+
+## Positional Argument
+
+<ParamField path="username" type="string" required>
+  The username to search across all sites in the selected database. Must be provided as the first non-flag argument (`flag.Arg(0)`). If omitted, Vesper prints a red error message and the usage block, then exits without performing any lookups.
+
+  **Example:**
+
+  ```bash
+  vesper johndoe
+  vesper johndoe --database sherlock
+  ```
+</ParamField>
+
+## Flags
+
+<ParamField query="--tui" type="bool" default="false">
+  Launches the interactive terminal UI mode. When this flag is present, Vesper ignores all other CLI flags and starts the full TUI flow: username input, database selection, real-time progress bar, and a results table. All configuration (timeout, worker count, buffer size) is hardcoded to defaults inside the TUI runner.
+
+  **Example:**
+
+  ```bash
+  vesper --tui
+  ```
+</ParamField>
+
+<ParamField query="-h / --help" type="bool" default="false">
+  Prints the full usage message (shown above) and exits immediately. No enumeration is performed. This flag takes priority over all other flags except `--tui`, which is parsed before `flags.Parse()` runs.
+
+  **Example:**
+
+  ```bash
+  vesper --help
+  vesper -h
+  ```
+</ParamField>
+
+<ParamField query="-v / --version" type="bool" default="false">
+  Prints the current version string and exits immediately. No enumeration is performed.
+
+  **Output:**
+
+  ```text
+  Vesper version 1.0.0
+  ```
+
+  **Example:**
+
+  ```bash
+  vesper --version
+  vesper -v
+  ```
+</ParamField>
+
+<ParamField query="-d / --database" type="string" default="whatsmyname">
+  Selects which site database to use for enumeration. An empty string (i.e., omitting the flag entirely) is treated identically to `whatsmyname`. Passing an unrecognized database name causes Vesper to print an error and the list of valid options, then return without running any lookups.
+
+  | Value | Description |
+  |---|---|
+  | `whatsmyname` | Default. Uses the WhatsMyName database. |
+  | `sherlock` | Uses the Sherlock database. |
+  | `maigret` | Uses the Maigret database. |
+  | `all` | Runs all three databases sequentially: Sherlock → WhatsMyName → Maigret. Flushes the HTTP connection pool between each run. |
+
+  **Example:**
+
+  ```bash
+  vesper johndoe -d sherlock
+  vesper johndoe --database maigret
+  vesper johndoe --database all
+  ```
+</ParamField>
+
+<ParamField query="-t / --timeout" type="integer" default="7">
+  Sets the per-request HTTP timeout in seconds. Each site check is given this many seconds to complete; if the request exceeds this limit, the site is recorded as an error. Higher values yield more complete results on slow or rate-limited sites at the cost of longer total run time. Lower values make runs faster but may miss some sites.
+
+  - **Default:** `7` seconds
+  - **Valid range:** `1` – `60` (inclusive)
+  - **Out-of-range behavior:** Vesper prints `"Error: Timeout must be between 1 and 60 seconds"` and exits without running any lookups.
+
+  **Example:**
+
+  ```bash
+  vesper johndoe -t 15
+  vesper johndoe --timeout 30
+  ```
+</ParamField>
+
+## Error Behavior Reference
+
+<Accordion title="Missing username">
+  If no positional argument is provided, Vesper prints the following in red and then shows the usage block before exiting:
+
+  ```text
+  Error: Username is required
+  ```
+
+  No HTTP requests are made. The program exits cleanly (no panic or non-zero exit code from a crash).
+</Accordion>
+
+<Accordion title="Invalid timeout value">
+  If the value passed to `-t` / `--timeout` is less than `1` or greater than `60`, Vesper prints:
+
+  ```text
+  Error: Timeout must be between 1 and 60 seconds
+  ```
+
+  The program returns immediately. No enumeration is started.
+</Accordion>
+
+<Accordion title="Unknown database name">
+  If the value passed to `-d` / `--database` is not one of `whatsmyname`, `sherlock`, `maigret`, or `all` (and is not empty), Vesper prints:
+
+  ```text
+  Unknown database: <name>
+  Available databases: sherlock, whatsmyname, maigret, all
+  ```
+
+  The program returns immediately without running any lookups.
+</Accordion>
+
+## Quick Reference Table
+
+| Flag | Short | Type | Default | Description |
+|---|---|---|---|---|
+| `--tui` | — | bool | `false` | Launch interactive TUI mode |
+| `--help` | `-h` | bool | `false` | Print usage and exit |
+| `--version` | `-v` | bool | `false` | Print version string and exit |
+| `--database` | `-d` | string | `""` (whatsmyname) | Database to enumerate against |
+| `--timeout` | `-t` | int | `7` | HTTP timeout per site, in seconds (1–60) |

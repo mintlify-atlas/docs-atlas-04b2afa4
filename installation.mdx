@@ -1,0 +1,156 @@
+---
+title: "Install Vesper on Linux, macOS, and Windows"
+sidebarTitle: "Installation"
+description: "Download a pre-built Vesper binary for your platform or build from source with Go 1.24. Supports Linux, macOS, and Windows on amd64 and arm64."
+---
+
+Vesper ships as a single self-contained binary with no runtime dependencies. You can be up and running in under two minutes by downloading a pre-built release, or you can compile directly from source if you prefer to build from the latest code. Both paths are covered below.
+
+<Tabs>
+  <Tab title="Pre-built Binary">
+    Pre-built binaries are published to the [GitHub Releases page](https://github.com/ppmpreetham/vesper/releases) for every tagged version. Each binary is compressed with UPX (`--best --lzma`) to minimise download size and includes a `checksums.txt` file so you can verify integrity before running.
+
+    **Supported platforms:**
+
+    | OS | amd64 | arm64 |
+    |---|---|---|
+    | Linux | ✅ | ✅ |
+    | macOS (Darwin) | ✅ | ✅ |
+    | Windows | ✅ | ✅ |
+
+    <Steps>
+      <Step title="Download the binary for your platform">
+        Visit [https://github.com/ppmpreetham/vesper/releases](https://github.com/ppmpreetham/vesper/releases) and download the asset that matches your operating system and architecture.
+
+        Filename format: `vesper-<os>-<arch>` (e.g. `vesper-linux-amd64`, `vesper-darwin-arm64`, `vesper-windows-amd64.exe`).
+      </Step>
+
+      <Step title="Make the binary executable (Linux and macOS only)">
+        Windows users can skip this step. On Linux and macOS, mark the downloaded file as executable:
+
+        ```bash
+        chmod +x vesper-linux-amd64
+        ```
+
+        Optionally rename it for convenience:
+
+        ```bash
+        mv vesper-linux-amd64 vesper
+        ```
+      </Step>
+
+      <Step title="(Optional) Verify the checksum">
+        Each release includes a `checksums.txt` file. Verify your download has not been tampered with:
+
+        ```bash
+        sha256sum -c checksums.txt --ignore-missing
+        ```
+      </Step>
+
+      <Step title="Run Vesper">
+        **Linux / macOS:**
+
+        ```bash
+        ./vesper --version
+        ```
+
+        **Windows (Command Prompt or PowerShell):**
+
+        ```powershell
+        vesper.exe --version
+        ```
+
+        You should see:
+
+        ```text
+        Vesper version 0.2.0
+        ```
+      </Step>
+    </Steps>
+
+    <Tip>
+      To run `vesper` from anywhere without the `./` prefix on Linux or macOS, move the binary to a directory on your `PATH`, such as `/usr/local/bin`:
+
+      ```bash
+      sudo mv vesper /usr/local/bin/vesper
+      ```
+    </Tip>
+  </Tab>
+
+  <Tab title="Build from Source">
+    Building from source lets you compile the very latest code or target a platform not covered by the pre-built binaries.
+
+    <Note>
+      The official CI pipeline uses **Go 1.24.3** (as declared in `go.mod`). Any Go 1.20 or later release should work, but Go 1.24.3 is recommended for parity with released binaries.
+    </Note>
+
+    <Steps>
+      <Step title="Install Go">
+        Download and install Go from [https://go.dev/dl/](https://go.dev/dl/). Confirm the installation:
+
+        ```bash
+        go version
+        ```
+
+        Expected output (or newer):
+
+        ```text
+        go version go1.24.3 linux/amd64
+        ```
+      </Step>
+
+      <Step title="Clone the repository">
+        ```bash
+        git clone https://github.com/ppmpreetham/vesper.git
+        cd vesper
+        ```
+      </Step>
+
+      <Step title="Build the binary">
+        ```bash
+        go build -o vesper .
+        ```
+
+        On Windows, specify the `.exe` extension:
+
+        ```powershell
+        go build -o vesper.exe .
+        ```
+
+        The build compiles all site data (WhatsMyName, Sherlock, Maigret) directly into the binary — no separate data files are needed at runtime.
+      </Step>
+
+      <Step title="Verify the build">
+        **Linux / macOS:**
+
+        ```bash
+        ./vesper --version
+        ```
+
+        **Windows:**
+
+        ```powershell
+        vesper.exe --version
+        ```
+
+        Expected output:
+
+        ```text
+        Vesper version 0.2.0
+        ```
+      </Step>
+    </Steps>
+
+    <Tip>
+      To cross-compile for a different OS or architecture, set the `GOOS` and `GOARCH` environment variables before building. For example, to build a Windows amd64 binary from Linux:
+
+      ```bash
+      GOOS=windows GOARCH=amd64 go build -o vesper-windows-amd64.exe .
+      ```
+    </Tip>
+  </Tab>
+</Tabs>
+
+## Next Steps
+
+Once Vesper is installed, head to the [Quickstart](/quickstart) guide to run your first username search.

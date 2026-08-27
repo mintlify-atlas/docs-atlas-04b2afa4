@@ -1,0 +1,152 @@
+---
+title: "Optimizing Vesper Search Speed and Accuracy"
+sidebarTitle: "Performance Tips"
+description: "Tune Vesper's timeout and database selection to balance search speed against result accuracy. Includes benchmarks and practical guidance for different investigation scenarios."
+---
+
+Vesper's raw speed comes from its goroutine-based worker pool: every search dispatches up to 250 concurrent HTTP requests at once. In practice, two runtime knobs control the trade-off between how fast Vesper finishes and how thorough its results are — the `--timeout` flag and the `--database` flag. Understanding how they interact lets you tune Vesper precisely to your investigation needs.
+
+## The Two Performance Levers
+
+<CardGroup cols={2}>
+  <Card title="--timeout" icon="clock">
+    Controls how long each worker waits for an HTTP response before giving up. A lower value finishes faster but may miss slow-responding sites. A higher value catches more sites at the cost of additional wall-clock time.
+  </Card>
+  <Card title="--database" icon="database">
+    Controls which site list — and therefore how many sites — Vesper queries. Fewer sites means a faster run. More sites means broader coverage with more potential matches and a higher false-positive rate.
+  </Card>
+</CardGroup>
+
+## Timeout Tuning
+
+The `--timeout` flag accepts any integer between 1 and 60 (seconds). The default is **7 seconds**, which provides a balanced starting point for most networks.
+
+| Timeout Range | Use Case | Trade-off |
+|---|---|---|
+| **1–5 s** (low) | Quick recon, high-bandwidth networks | Faster results; sites with slow CDN responses may be missed |
+| **7 s** (default) | General-purpose investigations | Good balance of speed and coverage |
+| **10–15 s** (high) | Thorough investigations, slow or congested networks | Catches slow-responding sites; increases total run time |
+| **16–60 s** (maximum) | Very high-latency environments | Diminishing returns above ~20 s for most sites |
+
+```bash
+# Quick scan — trade thoroughness for speed
+./vesper -t 5 johndoe
+
+# Default — good for most cases
+./vesper johndoe
+
+# Thorough scan — give slow sites more time to respond
+./vesper --timeout 12 johndoe
+```
+
+<Tip>
+Start with WhatsMyName at the default 7 s timeout. If you find matches and want to discover more platforms, escalate to `--database all --timeout 10` for a comprehensive cross-database sweep.
+</Tip>
+
+The timeout is applied **per request** by the HTTP client's `Timeout` field, meaning each of the 250 concurrent goroutine workers independently times out after the configured duration. On slow or congested networks, increase the timeout to avoid a situation where many sites time out and produce gaps in your results rather than definitive not-found responses.
+
+## Database Selection for Speed vs. Accuracy
+
+Vesper benchmarks were collected on Arch Linux with an AMD Ryzen 7 5000 Series CPU and 16 GB RAM. These figures represent the average wall-clock time to complete a full database scan.
+
+| Database | Avg Time | Stability | False Positives |
+|---|---|---|---|
+| `sherlock` | ~12 s | ⚠️ Moderate | Higher |
+| `whatsmyname` | ~21 s | ✅ Stable | Lowest |
+| `maigret` | ~33 s | ⚠️ Moderate | Higher |
+| `all` | ~66 s (sequential) | Mixed | Mixed |
+
+Vesper is **up to 3× faster** than competing tools like [Blackbird](https://github.com/p1ngul1n0/blackbird), even when running all three databases sequentially.
+
+## Concurrency Architecture
+
+Vesper's worker pool is configured at startup and remains fixed for the lifetime of a search:
+
+| Parameter | Value | Location |
+|---|---|---|
+| `NumWorkers` | **250** goroutines | `types.Config` / `flags.Parse()` |
+| `BufferSize` | **1000** items | Job channel buffer |
+
+Each database runner (Sherlock, WhatsMyName, Maigret) follows the same pattern: 250 goroutines read from a buffered job channel and each independently performs an HTTP request, reports progress, and sends results to a results channel. This means all 250 workers are saturated from the moment the first batch of jobs is enqueued.
+
+```go
+// From cmd/runner/sherlock.go — same pattern in all three runners
+for i := 0; i < config.NumWorkers; i++ {
+    wg.Add(1)
+    go func() {
+        defer wg.Done()
+        for job := range jobs {
+            result := tools.SherlockCheckURL(username, job.Data, job.Name)
+            results <- result
+            // ...
+            tools.NotifyProgress(currentCount)
+        }
+    }()
+}
+```
+
+NumWorkers and BufferSize are set in `flags.Parse()` and are not currently exposed as CLI flags — they are fixed at compile time. Changing them requires rebuilding from source.
+
+## HTTP Client Reuse
+
+When `--database all` is used, Vesper resets and recreates the HTTP client between each database run by calling `tools.ResetHTTPClient()`. This closes all idle connections accumulated during the previous search, preventing connection pool exhaustion over the ~66 second combined run and ensuring each database starts with a clean transport.
+
+```go
+// From cmd/runner/runner.go — RunAllDatabases()
+tools.ResetHTTPClient()
+sherlockCount := RunSherlockDatabase(username, config)
+
+tools.ResetHTTPClient()
+wmnCount := RunWhatsMyNameDatabase(username, config)
+
+tools.ResetHTTPClient()
+maigretCount := RunMaigretDatabase(username, config)
+```
+
+## Practical Scenarios
+
+<Tabs>
+  <Tab title="Quick recon">
+    You need a fast first pass on a username — speed matters more than completeness.
+
+    ```bash
+    ./vesper -d sherlock -t 5 johndoe
+    ```
+
+    **Why**: Sherlock is the fastest database at ~12 s average. Dropping the timeout to 5 s cuts total wall time further by not waiting on slow sites. Expect some false positives; manually verify anything that looks important.
+  </Tab>
+  <Tab title="Thorough investigation">
+    You need the most complete picture possible and can afford the time.
+
+    ```bash
+    ./vesper -d all -t 12 johndoe
+    ```
+
+    **Why**: `--database all` sweeps all three databases (Sherlock → WhatsMyName → Maigret) sequentially, covering the broadest set of platforms. Raising the timeout to 12 s ensures that slow CDN-backed sites in all three databases are not spuriously missed. Expect the full run to take approximately 66–90 s depending on network conditions.
+  </Tab>
+  <Tab title="Balanced default">
+    Standard OSINT workflow with reliable results and acceptable run time.
+
+    ```bash
+    ./vesper johndoe
+    ```
+
+    **Why**: The default database is `whatsmyname` with a 7 s timeout — the lowest false-positive rate and a ~21 s finish time. Good for daily-driver use when accuracy matters more than raw breadth.
+  </Tab>
+</Tabs>
+
+## Frequently Asked Questions
+
+<Accordion title="Why is Maigret slower than the other databases?">
+  Maigret checks a significantly larger number of sites than either WhatsMyName or Sherlock, including many niche and specialised platforms. Even with 250 concurrent workers, the sheer volume of distinct HTTP requests means Maigret takes roughly 33 seconds on average — about 2.75× longer than Sherlock and 1.6× longer than WhatsMyName. The timeout value you choose has a proportionally larger impact on Maigret's total run time than on the faster databases: a jump from 7 s to 12 s costs more absolute time with Maigret than with Sherlock, even though the per-site overhead is the same.
+</Accordion>
+
+<Accordion title="When should I use --database all?">
+  Use `--database all` for comprehensive investigations where you need to cross-reference results across all three site lists — for example, when building a full digital footprint for an individual or verifying whether a username is consistent across many platform types. Running all three databases sequentially (~66 s total at default timeout) is justified when:
+
+  - You want the broadest possible coverage in a single command
+  - You need to compare which databases surface the same username, helping you triage false positives
+  - You are doing a one-time deep investigation rather than a repeated quick check
+
+  For recurring quick checks or time-sensitive situations, stick with `whatsmyname` (most accurate) or `sherlock` (fastest) individually.
+</Accordion>

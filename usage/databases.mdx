@@ -1,0 +1,203 @@
+---
+title: "Choosing the Right Database for OSINT Searches"
+sidebarTitle: "Databases"
+description: "Compare Vesper's three OSINT databases — WhatsMyName, Sherlock, and Maigret — to choose the right one for your investigation's speed and accuracy needs."
+---
+
+Vesper bundles three battle-tested OSINT site lists — WhatsMyName, Sherlock, and Maigret — directly into the compiled binary. There is no separate download step and no external JSON file to manage at runtime: each database is generated from upstream JSON sources via metaprogramming scripts in `metaprogramming/` and compiled into Go source files under `sites/`. This means every Vesper binary ships with a fixed, reproducible snapshot of all three databases.
+
+<Note>
+All site data is embedded at compile time. To update databases to the latest upstream versions, regenerate the `sites/` files using the metaprogramming scripts and rebuild the binary.
+</Note>
+
+## Database Comparison
+
+| Database | Stability | Avg Time | Best For |
+|---|---|---|---|
+| `whatsmyname` | ✅ Stable | ~21 s | Accurate results with low false-positive rate |
+| `sherlock` | ⚠️ May produce false positives | ~12 s | Broad, fast coverage when accuracy is secondary |
+| `maigret` | ⚠️ May produce false positives | ~33 s | Maximum site coverage including niche platforms |
+| `all` | Mixed | ~66 s | Comprehensive investigations requiring cross-database results |
+
+<Warning>
+Sherlock and Maigret are known to produce false positives — they may report a username as found on a site where it does not actually exist. Only `whatsmyname` is considered stable for production investigations. Always verify results from Sherlock and Maigret manually before drawing conclusions.
+</Warning>
+
+## WhatsMyName (Default)
+
+WhatsMyName is Vesper's default database and the most reliable choice for most searches. Select it explicitly with `-d whatsmyname` or simply omit the `--database` flag entirely.
+
+WhatsMyName defines each site using a precise presence/absence fingerprint: a page must return the correct HTTP status code **and** contain an expected string, while simultaneously **not** containing a known miss-string that would indicate a user-not-found page. This two-factor check keeps the false-positive rate very low.
+
+**Key site fields:**
+
+| Field | Purpose |
+|---|---|
+| `name` | Human-readable site name |
+| `uri_check` | URL template — `%s` is substituted with the username |
+| `e_code` | Expected HTTP status code for a found profile |
+| `e_string` | String that must appear in the response body for a match |
+| `m_string` | Miss string — if present, the result is discarded as a false positive |
+| `m_code` | Miss HTTP code — additional guard against false positives |
+| `cat` | Category (e.g., social, gaming, coding) |
+| `known` | List of confirmed usernames used for testing |
+
+<Tabs>
+  <Tab title="Detection logic">
+    A site is counted as **FOUND** when all three conditions hold simultaneously:
+
+    1. The HTTP response code equals `e_code`
+    2. The response body contains `e_string`
+    3. The response body does **not** contain `m_string`
+
+    ```go
+    if strings.Contains(bodyStr, site.EString) && site.ECode == resp.StatusCode {
+        if !strings.Contains(bodyStr, site.MString) {
+            mCodeCondition := site.MCode == site.ECode || site.MCode != resp.StatusCode
+            if mCodeCondition {
+                result.Status = "FOUND"
+            }
+        }
+    }
+    ```
+  </Tab>
+  <Tab title="CLI usage">
+    ```bash
+    # Default — no flag needed
+    ./vesper johndoe
+
+    # Explicit
+    ./vesper --database whatsmyname johndoe
+    ./vesper -d whatsmyname johndoe
+    ```
+  </Tab>
+</Tabs>
+
+## Sherlock
+
+Sherlock is the fastest database at roughly 12 seconds average. It covers a wide range of general social media and community platforms. The trade-off is a higher false-positive rate because its detection methods rely on looser heuristics than WhatsMyName's combined string + status check.
+
+**Key site fields:**
+
+| Field | Purpose |
+|---|---|
+| `errorType` | Detection method: `status_code`, `message`, or `response_url` |
+| `errorMsg` | Error message string(s) — user-not-found indicator for `message` type |
+| `url` | Profile URL template (uses `%s` for username) |
+| `urlMain` | Site homepage |
+| `urlProbe` | Alternative URL to probe instead of the profile URL |
+| `username_claimed` | Known-good username for testing |
+| `regexCheck` | Optional regex — username must match before Vesper attempts the request |
+| `requestMethod` | HTTP method (`GET` or `POST`) |
+| `headers` | Custom request headers |
+| `errorCode` | Custom error status code (defaults to 404) |
+| `errorUrl` | Redirect URL indicating a not-found page for `response_url` type |
+
+<Tabs>
+  <Tab title="Detection logic">
+    Sherlock supports three `errorType` values. The site is **FOUND** when the profile page does **not** exhibit the error signature:
+
+    - **`status_code`**: FOUND when `resp.StatusCode != errorCode` (default error code is 404)
+    - **`message`**: FOUND when none of the `errorMsg` strings appear in the response body
+    - **`response_url`**: FOUND when the final request URL (after redirects) does not equal `errorUrl`
+
+    ```go
+    switch site.ErrorType {
+    case "status_code":
+        if resp.StatusCode == errorCode {
+            result.Status = "NOT FOUND"
+        } else {
+            result.Status = "FOUND"
+        }
+    case "message":
+        // FOUND if no errorMsg string is present in body
+    case "response_url":
+        // FOUND if final URL != errorUrl
+    }
+    ```
+  </Tab>
+  <Tab title="CLI usage">
+    ```bash
+    ./vesper --database sherlock johndoe
+    ./vesper -d sherlock johndoe
+    ```
+  </Tab>
+</Tabs>
+
+## Maigret
+
+Maigret is the most comprehensive database, covering a large number of niche and specialised platforms not found in either WhatsMyName or Sherlock. It is also the slowest at roughly 33 seconds average. Vesper automatically skips any site whose `disabled` field is set to `true`, so the actual checked-site count is lower than the raw database size.
+
+**Key site fields:**
+
+| Field | Purpose |
+|---|---|
+| `url` | Profile URL template — `{username}` placeholder is replaced with the target |
+| `urlProbe` | Optional alternative probe URL |
+| `checkType` | Detection method: `status_code` or `message` |
+| `presenceStrs` | Strings that must appear in the response body for a match |
+| `absenceStrs` | Strings that, if present, disqualify the match |
+| `regexCheck` | Optional regex — username must match before the request is made |
+| `disabled` | If `true`, Vesper skips the site entirely |
+
+<Tabs>
+  <Tab title="Detection logic">
+    Maigret uses two check types. Disabled sites are skipped before any network request is made:
+
+    - **`status_code`**: FOUND when `resp.StatusCode == 200`
+    - **`message`**: FOUND when at least one `presenceStrs` entry appears in the body **and** no `absenceStrs` entry appears. Falls back to status code 200 when neither list matches.
+
+    ```go
+    if site.Disabled != nil && *site.Disabled {
+        result.Status = "DISABLED"
+        return result
+    }
+    // ...
+    switch checkType {
+    case "status_code":
+        if resp.StatusCode == 200 { result.Status = "FOUND" }
+    case "message":
+        // FOUND if presenceStr match AND no absenceStr match
+    }
+    ```
+  </Tab>
+  <Tab title="CLI usage">
+    ```bash
+    ./vesper --database maigret johndoe
+    ./vesper -d maigret johndoe
+    ```
+  </Tab>
+</Tabs>
+
+## Running All Databases
+
+Passing `--database all` instructs Vesper to run all three databases sequentially in a fixed order: **Sherlock → WhatsMyName → Maigret**. Between each database, Vesper resets the HTTP client (`tools.ResetHTTPClient()`) to close idle connections and start fresh, avoiding connection pool exhaustion across long runs.
+
+```bash
+./vesper --database all johndoe
+./vesper -d all johndoe
+```
+
+The terminal output announces each phase:
+
+```
+=== Starting Sherlock database enumeration ===
+Found: ...
+
+=== Starting WhatsMyName database enumeration ===
+Found: ...
+
+=== Starting Maigret database enumeration ===
+Found: ...
+
+=== Summary ===
+Execution completed in 1m6.2s
+Total found username on 11 sites across all databases
+  - Sherlock: 5 matches
+  - WhatsMyName: 4 matches
+  - Maigret: 2 matches
+```
+
+<Tip>
+When using `--database all`, consider setting a higher `--timeout` (e.g., 10–12 s) so that slow-responding sites in all three databases are not spuriously missed during the long combined run.
+</Tip>

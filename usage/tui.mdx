@@ -1,0 +1,162 @@
+---
+title: "Vesper Interactive TUI Mode Guide"
+sidebarTitle: "TUI Mode"
+description: "Launch Vesper's interactive terminal UI to search usernames visually. Navigate three screens: username input, database picker, live progress bar, and results table."
+---
+
+Vesper ships with a full interactive terminal UI built on [Charmbracelet Bubble Tea](https://github.com/charmbracelet/bubbletea), [Bubbles](https://github.com/charmbracelet/bubbles), and [Lip Gloss](https://github.com/charmbracelet/lipgloss). It guides you through the entire search workflow — entering a username, picking a database, watching progress in real time, and browsing results in a scrollable table — without ever having to remember a single flag.
+
+## Launching TUI Mode
+
+Start the TUI with the `--tui` flag:
+
+```bash
+./vesper --tui
+```
+
+<Note>
+On Windows, use `vesper.exe --tui`. The TUI is fully functional on Windows terminals that support ANSI escape codes (Windows Terminal, ConEmu, WSL).
+</Note>
+
+The TUI takes over your terminal session and walks you through four sequential screens. It always uses the **default 7 second timeout** for HTTP requests — if you need a custom timeout, use [CLI mode](/usage/cli) with the `--timeout` flag instead.
+
+<Note>
+TUI mode always runs with a 7 s per-request timeout, matching the CLI default. To use a different timeout value, run `./vesper --timeout <seconds> <username>` in CLI mode.
+</Note>
+
+## TUI Flow
+
+<Steps>
+  <Step title="Username Input Screen">
+    The first screen presents the **VESPER OSINT** title banner and a focused text input field.
+
+    - **Placeholder**: `Enter username to search`
+    - **Max length**: 50 characters (`CharLimit = 50`)
+    - Type the username you want to investigate, then press **Enter** to advance to database selection.
+    - Submitting an empty field shows an inline `username cannot be empty` error without advancing.
+    - Press **Ctrl+C** or **q** at any time to quit.
+
+    ```
+     VESPER OSINT
+
+    Username:
+    > johndoe_
+
+    Press Enter to continue, Ctrl+C to quit
+    ```
+  </Step>
+
+  <Step title="Database Selection Screen">
+    The second screen displays the username you entered (locked in, greyed out) and an arrow-key navigable list of four databases:
+
+    | Option | Description |
+    |---|---|
+    | `whatsmyname` | Use WhatsMyName database (stable) |
+    | `sherlock` | Use Sherlock database |
+    | `maigret` | Use Maigret database |
+    | `all` | Use all available databases |
+
+    Use **↑ / ↓** to move the selection highlight, then press **Enter** to confirm your choice. The list has filtering and pagination disabled — all four options are always visible.
+
+    ```
+     VESPER OSINT
+
+    Username: johndoe
+
+    > whatsmyname   Use WhatsMyName database (stable)
+      sherlock       Use Sherlock database
+      maigret        Use Maigret database
+      all            Use all available databases
+
+    ↑/↓: Select • Enter: Confirm • Ctrl+C: Quit
+    ```
+
+    <Tip>
+      Select **all** to run Sherlock, WhatsMyName, and Maigret sequentially in a single TUI session. This is the most comprehensive search option and is ideal when you need to cross-reference results across all three databases.
+    </Tip>
+  </Step>
+
+  <Step title="Progress Screen">
+    After confirming the database, the TUI switches to an **alternate screen** (preserving your previous terminal buffer) and starts enumeration. This screen shows:
+
+    - The username being searched, highlighted
+    - The name of the database currently being queried (e.g., `Searching whatsmyname database...`)
+    - An animated **progress bar** that fills as sites are checked
+    - A real-time **sites counter** — `X / N sites checked` — updated by each goroutine worker as it completes a request
+    - A live **found counter** — `Found N profiles so far` — that increments whenever a match is detected
+
+    When using `--database all` in TUI mode, the progress bar covers all three databases in sequence: Sherlock first, WhatsMyName second, Maigret third.
+
+    ```
+     VESPER OSINT
+
+      Searching for: johndoe
+      Searching whatsmyname database...
+
+      ████████████████████░░░░░░░░░░░░░░░░  48%
+      189 / 394 sites checked
+
+      Found 3 profiles so far
+
+      Press q to cancel
+    ```
+
+    Once all sites are checked the progress bar reaches 100 % and the screen shows either:
+    - `Found N profiles. Press any key to view results.`
+    - `No profiles found. Press any key to exit.`
+  </Step>
+
+  <Step title="Results Table">
+    If at least one profile was found, the TUI opens a **second alternate screen** with a scrollable results table. The table has two columns:
+
+    | Column | Width | Content |
+    |---|---|---|
+    | **Site** | 30 chars | The name of the site where the username was found |
+    | **URL** | 70 chars | The full profile URL |
+
+    Navigate the table with **↑ / ↓** arrow keys. For long result sets, use **Page Up / Page Down** to scroll by page.
+
+    ```
+     FOUND PROFILES
+    Found 4 profiles
+    ┌──────────────────────────────┬──────────────────────────────────────────────────────────┐
+    │ Site                         │ URL                                                      │
+    ├──────────────────────────────┼──────────────────────────────────────────────────────────┤
+    │ GitHub                       │ https://github.com/johndoe                               │
+    │ GitLab                       │ https://gitlab.com/johndoe                               │
+    │ Reddit                       │ https://www.reddit.com/user/johndoe                      │
+    │ HackerNews                   │ https://news.ycombinator.com/user?id=johndoe             │
+    └──────────────────────────────┴──────────────────────────────────────────────────────────┘
+
+    ↑/↓: Navigate • Page Up/Down: Scroll • q: Quit
+    ```
+
+    Press **q**, **Esc**, or **Ctrl+C** to exit the table view. Vesper then prints a plain-text summary to standard output before returning to your normal terminal:
+
+    ```
+    Execution completed
+    Found username on 4 sites
+      - WhatsMyName: 4 matches
+    ```
+  </Step>
+</Steps>
+
+## Keyboard Shortcuts
+
+| Key | Screen | Action |
+|---|---|---|
+| **Enter** | Username input | Submit username and advance |
+| **↑ / ↓** | Database list | Move selection |
+| **Enter** | Database list | Confirm selection and start search |
+| **q** | Progress, Results | Cancel / quit |
+| **Ctrl+C** | Any screen | Quit immediately |
+| **Esc** | Results table | Exit table view |
+| **Page Up / Page Down** | Results table | Scroll results |
+
+## Technical Notes
+
+The TUI is implemented across three Bubble Tea models:
+
+- **`tui.Model`** (`cmd/tui/model.go`) — manages the two input screens and transitions between `stateUsername`, `stateDatabase`, and `stateReady`
+- **`tui.ProgressModel`** (`cmd/tui/progress.go`) — runs in alt-screen, subscribes to `NotifyProgress` and `NotifyFound` callbacks from the worker pool, animates the progress bar at 100 ms tick intervals
+- **`tui.TableModel`** (`cmd/tui/table.go`) — runs in a second alt-screen using the Bubbles `table` component with a styled header and highlighted row selection

@@ -1,47 +1,132 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Started with Vesper in Under a Minute"
+sidebarTitle: "Quickstart"
+description: "Search your first username across hundreds of sites in seconds. Learn the essential Vesper commands to start an OSINT investigation immediately."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
+This guide walks you through the five essential Vesper commands you need to begin an OSINT investigation. Each step builds on the last, taking you from a basic search to tweaking databases and timeouts for your specific use case. The whole thing takes less than a minute to read — the searches themselves finish in under a minute too.
 
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
-
-## Prerequisites
-
-Before you begin, you must have:
-
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+**Prerequisite:** Vesper must be installed and executable. If you haven't done that yet, see the [Installation guide](/installation).
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
+  <Step title="Run your first username search">
+    Pass a username as a positional argument. No flags are required — Vesper defaults to the WhatsMyName database, which is the most stable option.
 
     ```bash
-    npm install your-package
+    ./vesper johndoe
     ```
+
+    Vesper will print a startup banner, then stream results to your terminal in real time as matches are discovered:
+
+    ```text
+    Starting enumeration for username: johndoe (timeout: 7s)
+    Using WhatsMyName database for enumeration...
+    Found: GitHub at https://github.com/johndoe
+    Found: GitLab at https://gitlab.com/johndoe
+    Found: HackerNews at https://news.ycombinator.com/user?id=johndoe
+    ```
+
+    <Tip>
+      WhatsMyName is the only fully stable database in Vesper right now. Start here for the most accurate results before moving on to Sherlock or Maigret.
+    </Tip>
   </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
 
-    ```bash
-    your-cli init
+  <Step title="Interpret the output and summary">
+    Each match is printed as it is found, so you see progress without waiting for the full sweep to finish. When the search completes, Vesper prints a summary:
+
+    ```text
+    Execution completed in 21.34s
+    Found username on 14 sites
     ```
+
+    When you run with `--database all`, the summary breaks down matches per database:
+
+    ```text
+    === Summary ===
+    Execution completed in 1m6.02s
+    Total found username on 41 sites across all databases
+      - Sherlock: 12 matches
+      - WhatsMyName: 14 matches
+      - Maigret: 15 matches
+    ```
+
+    A result printed as `Found: SiteName at https://...` means the site returned a positive signal for that username. A site that does not match is silently skipped — only hits appear in the output.
   </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+
+  <Step title="Try a specific database">
+    Use `--database` (or `-d`) to target one of the three integrated databases. Sherlock is optimised for social media and general platforms:
 
     ```bash
-    your-cli start
+    ./vesper --database sherlock johndoe
     ```
+
+    Available database values:
+
+    | Value | Database |
+    |---|---|
+    | `whatsmyname` | WhatsMyName (default) |
+    | `sherlock` | Sherlock |
+    | `maigret` | Maigret |
+    | `all` | All three databases, run sequentially |
+
+    To query every database in one command:
+
+    ```bash
+    ./vesper --database all johndoe
+    ```
+
+    <Warning>
+      Sherlock and Maigret are known to produce false positives. Always verify matches manually before drawing conclusions.
+    </Warning>
+  </Step>
+
+  <Step title="Try interactive TUI mode">
+    Vesper includes a full-screen terminal UI built with Bubble Tea. Launch it with the `--tui` flag:
+
+    ```bash
+    ./vesper --tui
+    ```
+
+    The TUI guides you through three phases automatically:
+
+    1. **Username input** — type a username and press `Enter`
+    2. **Database selection** — use `↑`/`↓` to highlight a database and press `Enter` to confirm
+    3. **Progress view** — a live progress bar shows sites checked in real time; found matches are collected as they arrive
+    4. **Results table** — when the sweep finishes, results are displayed in an interactive table; press `q` to quit
+
+    TUI mode uses the same 250-worker engine as the CLI — it is a different interface, not a different search.
+  </Step>
+
+  <Step title="Adjust the timeout">
+    The default HTTP timeout is 7 seconds per request. Use `--timeout` (or `-t`) to change it. A higher value catches slow-responding sites at the cost of longer total run time; a lower value finishes faster but may miss sites with high latency.
+
+    ```bash
+    ./vesper --timeout 12 johndoe
+    ```
+
+    The timeout must be between 1 and 60 seconds:
+
+    ```bash
+    # Fast sweep — may miss slow sites
+    ./vesper --timeout 3 johndoe
+
+    # Thorough sweep — catches slow sites, takes longer
+    ./vesper --timeout 15 johndoe
+    ```
+
+    <Note>
+      The timeout applies per HTTP request, not to the total execution time. Increasing it does not change concurrency — Vesper still runs 250 workers simultaneously.
+    </Note>
   </Step>
 </Steps>
 
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
+## What's Next
 
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
-</Tip>
+<CardGroup cols={2}>
+  <Card title="CLI Reference" icon="terminal" href="/usage/cli">
+    Detailed documentation for every flag, argument, and default value.
+  </Card>
+  <Card title="Databases" icon="database" href="/usage/databases">
+    Learn how WhatsMyName, Sherlock, and Maigret differ and when to use each.
+  </Card>
+</CardGroup>
